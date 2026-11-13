@@ -13,7 +13,7 @@ Scenario, identical in every phase:
 Exactly one withdrawal should succeed. Each phase applies a different
 control and reports what actually happened.
 
-Run at: 2026-11-13 08:24:56 UTC
+Run at: 2026-11-13 19:20:15 UTC
 PostgreSQL: 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
 
 ==============================================================
@@ -31,7 +31,7 @@ is posted and then rolled back; the ledger must show no trace of it.
 BEGIN
  posted_reference 
 ------------------
- KP-2026-866117
+ KP-2026-839216
 (1 row)
 
  balance_inside_transaction 
@@ -51,13 +51,13 @@ ROLLBACK
 BEGIN
  first_posting  
 ----------------
- KP-2026-875433
+ KP-2026-847278
 (1 row)
 
 SAVEPOINT
  second_posting 
 ----------------
- KP-2026-861626
+ KP-2026-815513
 (1 row)
 
 ROLLBACK
@@ -331,8 +331,8 @@ shown afterwards.
   A| NOTICE:  locked A
   A| NOTICE:  reaching for B...
   A| ERROR:  deadlock detected
-  A| DETAIL:  Process 391 waits for ShareLock on transaction 1048; blocked by process 393.
-  A| Process 393 waits for ShareLock on transaction 1047; blocked by process 391.
+  A| DETAIL:  Process 41913 waits for ShareLock on transaction 975; blocked by process 41915.
+  A| Process 41915 waits for ShareLock on transaction 974; blocked by process 41913.
   A| HINT:  See server log for query details.
   A| CONTEXT:  while locking tuple (68,3) in relation "accounts"
   A| SQL statement "SELECT 1 FROM accounts WHERE account_reference='WAL-TEST-B-NGN' FOR UPDATE"
