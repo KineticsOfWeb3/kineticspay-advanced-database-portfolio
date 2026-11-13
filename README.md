@@ -58,8 +58,8 @@ not assumed away; they are measured in Portfolio 2.
 | 2 | [Query Processing and Optimisation](portfolio-2-query-optimisation/) | 7 | ✅ Complete — 7 experiments, 528k rows |
 | 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | ✅ Complete — race reproduced and fixed |
 | 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | ✅ Complete — document model on real ledger data |
-| 5 | [Distributed and Cloud Database Exercise](portfolio-5-distributed-cloud/) | 6 | 🔸 Next |
-| — | [Final Documentation](final-documentation/) | 6 | ⬜ Not started |
+| 5 | [Distributed and Cloud Database Exercise](portfolio-5-distributed-cloud/) | 6 | ✅ Complete — real primary/standby pair |
+| — | [Final Documentation](final-documentation/) | 6 | 🔸 Remaining |
 
 ---
 
@@ -112,6 +112,12 @@ kineticspay-advanced-database-portfolio/
 │   └── evidence/
 │
 ├── portfolio-5-distributed-cloud/
+│   ├── README.md
+│   ├── setup-replication.sh    primary + hot standby via pg_basebackup
+│   ├── cap-experiments.sh      lag, CAP sync vs async, failover, data loss
+│   ├── sharding-2pc.sh         fragmentation, pruning, FDW, two-phase commit
+│   ├── analysis.md             full analysis
+│   ├── deployment/             containerised topology (not executed)
 │   ├── replication-config/
 │   └── evidence/
 │

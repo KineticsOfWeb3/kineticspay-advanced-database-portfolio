@@ -29,3 +29,6 @@ portfolio-2-query-optimisation/data/
 
 # Portfolio 4 generated documents (reproducible from export_documents.py)
 portfolio-4-nosql/data/
+
+# Portfolio 5 deployment secrets
+portfolio-5-distributed-cloud/deployment/.env

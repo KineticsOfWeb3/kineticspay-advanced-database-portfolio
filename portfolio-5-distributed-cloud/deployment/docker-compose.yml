@@ -1,0 +1,102 @@
+# =====================================================================
+# KineticsPay - multi-region PostgreSQL topology
+# Portfolio 5: Distributed and Cloud Database Exercise
+# Biliaminu Abdulfarid (301918844)
+#
+# NOT EXECUTED IN THIS PORTFOLIO. Docker is unavailable in the
+# environment the experiments were run in, so this file is provided as a
+# deployment artefact rather than as evidence. Everything in evidence/
+# was produced by two real PostgreSQL clusters on one host (ports 5432
+# and 5433) instead - see README.md.
+#
+# This compose file is the same topology with the one thing that setup
+# could not reproduce: separate containers with a network between them,
+# so latency and partition can be injected.
+#
+#   docker compose up -d
+#   docker compose exec primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+#
+# To simulate a regional partition:
+#   docker network disconnect kineticspay_region_link kineticspay-standby-1
+# =====================================================================
+services:
+
+  primary:
+    image: postgres:16
+    container_name: kineticspay-primary
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: kineticspay
+      # Lagos region, authoritative for NG data under NDPA 2023
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c=wal_level=replica
+      - -c=max_wal_senders=10
+      - -c=max_replication_slots=10
+      - -c=wal_keep_size=512MB
+      - -c=hot_standby_feedback=on
+      - -c=max_prepared_transactions=20
+      # synchronous_standby_names deliberately EMPTY by default.
+      # Experiment 3 measured what happens when it is set and the
+      # standby is unreachable: writes block indefinitely, and
+      # statement_timeout does not rescue them.
+      - -c=synchronous_standby_names=
+    volumes:
+      - primary_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    ports: ["5432:5432"]
+    networks: [region_link]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kineticspay"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  standby:
+    image: postgres:16
+    container_name: kineticspay-standby
+    depends_on:
+      primary: {condition: service_healthy}
+    environment:
+      PGPASSWORD: ${REPLICATION_PASSWORD:?set REPLICATION_PASSWORD in .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    # Abuja region. Read-only hot standby serving regional read traffic.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        if [ ! -s "$$PGDATA/PG_VERSION" ]; then
+          pg_basebackup -h primary -p 5432 -U replicator \
+            -D "$$PGDATA" -Fp -Xs -P -R -S standby_abuja
+        fi
+        exec postgres -c hot_standby=on -c max_prepared_transactions=20
+    volumes:
+      - standby_data:/var/lib/postgresql/data
+    ports: ["5433:5432"]
+    networks: [region_link]
+
+  # Optional: a connection pooler in front of the pair. In production
+  # this is where read/write splitting and failover routing live, so the
+  # application does not need to know which node is primary.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    depends_on: [primary]
+    environment:
+      DB_HOST: primary
+      DB_NAME: kineticspay
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 500
+      DEFAULT_POOL_SIZE: 25
+    ports: ["6432:5432"]
+    networks: [region_link]
+
+volumes:
+  primary_data:
+  standby_data:
+
+networks:
+  region_link:
+    driver: bridge
