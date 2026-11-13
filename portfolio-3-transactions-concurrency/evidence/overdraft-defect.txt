@@ -1,0 +1,21 @@
+==============================================================
+DEFECT FOUND AND FIXED - overdraft rule blocked repair deposits
+==============================================================
+Wallet WAL-CUS-001052-NGN balance: -854679.1600
+
+--- BEFORE the fix: a 100.00 deposit into a negative wallet ---
+ERROR:  Overdraft refused on WAL-CUS-001052-NGN: balance would be -854579.1600
+(the only action that repairs the account was itself rejected)
+
+--- AFTER the fix: the same deposit ---
+BEGIN
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+COMMIT
+
+--- but a further DEBIT on that same negative wallet is still refused ---
+INSERT 0 1
+ERROR:  Overdraft refused on WAL-CUS-001052-NGN: balance would be -854679.1600 after a DEBIT of 100.0000
+HINT:  Take a row lock on the account before posting.
+CONTEXT:  PL/pgSQL function fn_assert_no_overdraft() line 36 at RAISE

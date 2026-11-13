@@ -1,0 +1,118 @@
+
+==============================================================
+VERIFICATION 1 - the original race, against fn_safe_withdraw
+==============================================================
+Same two sessions, same 50,000 wallet, same two 35,000 withdrawals.
+--- before ---
+ wallet_reference |  balance   
+------------------+------------
+ WAL-TEST-A-NGN   | 50000.0000
+ WAL-TEST-B-NGN   | 50000.0000
+(2 rows)
+
+----- SESSION A -----
+  A| NOTICE:  WITHDRAWAL SUCCEEDED
+  A| DO
+----- SESSION B -----
+  B| ERROR:  Insufficient funds in WAL-TEST-A-NGN: balance 15000.0000, requested 35000
+  B| CONTEXT:  PL/pgSQL function fn_safe_withdraw(character varying,numeric,character varying) line 32 at RAISE
+  B| SQL statement "SELECT fn_safe_withdraw('WAL-TEST-A-NGN', 35000, 'safe withdrawal')"
+  B| PL/pgSQL function inline_code_block line 2 at PERFORM
+
+--- after (expect 15,000: exactly one withdrawal) ---
+ wallet_reference |  balance   
+------------------+------------
+ WAL-TEST-A-NGN   | 15000.0000
+ WAL-TEST-B-NGN   | 50000.0000
+(2 rows)
+
+
+==============================================================
+VERIFICATION 2 - simultaneous commits, the case that defeated Phase 2B
+==============================================================
+----- SESSION A -----
+  A| NOTICE:  WITHDRAWAL SUCCEEDED
+  A| DO
+----- SESSION B -----
+  B| ERROR:  Insufficient funds in WAL-TEST-A-NGN: balance 15000.0000, requested 35000
+  B| CONTEXT:  PL/pgSQL function fn_safe_withdraw(character varying,numeric,character varying) line 32 at RAISE
+  B| SQL statement "SELECT fn_safe_withdraw('WAL-TEST-A-NGN', 35000, 'safe withdrawal')"
+  B| PL/pgSQL function inline_code_block line 2 at PERFORM
+
+--- after (expect 15,000) ---
+ wallet_reference |  balance   
+------------------+------------
+ WAL-TEST-A-NGN   | 15000.0000
+ WAL-TEST-B-NGN   | 50000.0000
+(2 rows)
+
+
+==============================================================
+VERIFICATION 3 - five concurrent withdrawals against one 50,000 wallet
+==============================================================
+35,000 each. Only one can be affordable.
+  session 1| WITHDRAWAL SUCCEEDED
+  session 2| Insufficient funds in WAL-TEST-A-NGN: balance 15000.0000, requested 35000
+  session 3| Insufficient funds in WAL-TEST-A-NGN: balance 15000.0000, requested 35000
+  session 4| Insufficient funds in WAL-TEST-A-NGN: balance 15000.0000, requested 35000
+  session 5| Insufficient funds in WAL-TEST-A-NGN: balance 15000.0000, requested 35000
+
+--- after (expect 15,000) ---
+ wallet_reference |  balance   
+------------------+------------
+ WAL-TEST-A-NGN   | 15000.0000
+ WAL-TEST-B-NGN   | 50000.0000
+(2 rows)
+
+
+==============================================================
+VERIFICATION 4 - opposing transfers that deadlocked in Phase 6
+==============================================================
+A transfers 10,000 to B while B transfers 10,000 to A, concurrently.
+----- SESSION A -----
+  A| NOTICE:  A->B OK
+  A| DO
+----- SESSION B -----
+  B| NOTICE:  B->A OK
+  B| DO
+
+--- after (both should succeed, no deadlock; each pays a 50 fee) ---
+ wallet_reference |  balance   
+------------------+------------
+ WAL-TEST-A-NGN   | 49950.0000
+ WAL-TEST-B-NGN   | 49950.0000
+(2 rows)
+
+
+==============================================================
+VERIFICATION 5 - insufficient funds is a clean rejection, not a crash
+==============================================================
+  ERROR:  Insufficient funds in WAL-TEST-A-NGN: balance 50000.0000, requested 999999
+  CONTEXT:  PL/pgSQL function fn_safe_withdraw(character varying,numeric,character varying) line 32 at RAISE
+--- balance unchanged ---
+ wallet_reference |  balance   
+------------------+------------
+ WAL-TEST-A-NGN   | 50000.0000
+ WAL-TEST-B-NGN   | 50000.0000
+(2 rows)
+
+
+==============================================================
+VERIFICATION 6 - ledger integrity survives all of the above
+==============================================================
+ currency_code |     debits      |     credits     |  result  
+---------------+-----------------+-----------------+----------
+ NGN           | 6353815121.9900 | 6353815121.9900 | BALANCED
+ USD           |    5056902.5800 |    5056902.5800 | BALANCED
+(2 rows)
+
+ legacy_negative_wallets | most_negative 
+-------------------------+---------------
+                    2086 |  -854579.1600
+(1 row)
+
+ test_wallets_negative 
+-----------------------
+                     0
+(1 row)
+
