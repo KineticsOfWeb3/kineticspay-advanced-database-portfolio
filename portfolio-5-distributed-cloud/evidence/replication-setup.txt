@@ -1,0 +1,89 @@
+
+==============================================================
+1. Prepare the primary for replication and 2PC
+==============================================================
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+DROP ROLE
+CREATE ROLE
+localhost:5432 - accepting connections
+           name            | setting 
+---------------------------+---------
+ hot_standby_feedback      | on
+ max_prepared_transactions | 20
+ wal_keep_size             | 256
+ wal_level                 | replica
+(4 rows)
+
+
+==============================================================
+2. Create a physical replication slot
+==============================================================
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+   slot_name   | lsn 
+---------------+-----
+ standby_abuja | 
+(1 row)
+
+
+==============================================================
+3. Base backup to build the standby
+==============================================================
+running pg_basebackup (streams the whole 528k-row cluster) ...
+waiting for checkpoint
+203045/203045 kB (100%), 0/1 tablespace
+203045/203045 kB (100%), 1/1 tablespace
+
+real	0m0.804s
+user	0m0.024s
+sys	0m0.220s
+
+==============================================================
+4. Configure and start the standby
+==============================================================
+--- standby.signal present? ---
+-rw------- 1 postgres postgres 0 Nov 13 19:16 /var/lib/pgstandby/standby.signal
+--- primary_conninfo ---
+primary_conninfo = 'user=replicator passfile=''/var/lib/postgresql/.pgpass'' channel_binding=prefer host=localhost port=5432 sslmode=prefer sslcompression=0 sslcertmode=allow sslsni=1 ssl_min_protocol_version=TLSv1.2 gssencmode=prefer krbsrvname=postgres gssdelegation=0 target_session_attrs=any load_balance_hosts=disable'
+primary_slot_name = 'standby_abuja'
+localhost:5433 - accepting connections
+
+==============================================================
+5. Verify the replication link is live
+==============================================================
+--- on the primary: who is connected as a WAL sender? ---
+-[ RECORD 1 ]----+----------------
+application_name | walreceiver
+state            | streaming
+sync_state       | async
+sent_lsn         | 0/18000000
+write_lsn        | 0/18000000
+flush_lsn        | 0/18000000
+replay_lsn       | 0/18000000
+write_lag        | 00:00:00.000068
+flush_lag        | 00:00:00.000068
+replay_lag       | 00:00:00.000068
+
+--- on the standby: is it in recovery? ---
+ in_recovery |  received  |  replayed  
+-------------+------------+------------
+ t           | 0/18000000 | 0/18000000
+(1 row)
+
+--- does the standby already hold the data? ---
+ledger entries on standby: 528763
+
+==============================================================
+6. The standby is READ-ONLY
+==============================================================
+attempting a write on the standby (must be refused):
+ERROR:  cannot execute INSERT in a read-only transaction
+
+setup complete: primary on 5432, hot standby on 5433
