@@ -1,0 +1,168 @@
+Timing is on.
+ALTER TABLE
+Time: 1.794 ms
+ALTER TABLE
+Time: 0.493 ms
+ALTER TABLE
+Time: 0.508 ms
+ALTER TABLE
+Time: 0.586 ms
+ALTER TABLE
+Time: 0.661 ms
+ALTER TABLE
+Time: 0.237 ms
+ALTER TABLE
+Time: 0.268 ms
+--- loading customers ---
+COPY 5000
+Time: 76.290 ms
+--- loading accounts ---
+COPY 5498
+Time: 106.767 ms
+--- loading transactions ---
+COPY 250000
+Time: 5755.561 ms (00:05.756)
+--- loading ledger entries ---
+COPY 528630
+Time: 11298.429 ms (00:11.298)
+ALTER TABLE
+Time: 0.837 ms
+ALTER TABLE
+Time: 0.530 ms
+ALTER TABLE
+Time: 0.454 ms
+ALTER TABLE
+Time: 2.200 ms
+ALTER TABLE
+Time: 0.529 ms
+ setval 
+--------
+   5006
+(1 row)
+
+Time: 1.423 ms
+ setval 
+--------
+   5510
+(1 row)
+
+Time: 0.765 ms
+ setval 
+--------
+ 250010
+(1 row)
+
+Time: 1.945 ms
+ setval 
+--------
+ 528650
+(1 row)
+
+Time: 0.815 ms
+ALTER TABLE
+Time: 0.622 ms
+ALTER TABLE
+Time: 0.658 ms
+ALTER TABLE
+Time: 0.572 ms
+ALTER TABLE
+Time: 0.681 ms
+--- analysing ---
+VACUUM
+Time: 18.553 ms
+VACUUM
+Time: 9.856 ms
+VACUUM
+Time: 177.968 ms
+VACUUM
+Time: 183.545 ms
+Timing is off.
+
+==============================================================
+POST-LOAD VALIDATION
+==============================================================
+
+V1  Row counts
+    relation    | count  
+----------------+--------
+ accounts       |   5510
+ customers      |   5006
+ ledger_entries | 528647
+ transactions   | 250010
+(4 rows)
+
+
+V2  Trial balance per currency - debits must equal credits
+ currency_code |  total_debits   |  total_credits  | result 
+---------------+-----------------+-----------------+--------
+ NGN           | 6351422709.8800 | 6351422709.8800 | PASS
+ USD           |    5056902.5800 |    5056902.5800 | PASS
+(2 rows)
+
+
+V3  Unbalanced transactions (expect 0)
+ unbalanced_transactions 
+-------------------------
+                       0
+(1 row)
+
+
+V4  Status vs postings - settled must post >= 2, unsettled must post 0
+  status   | transactions | with_no_postings | single_sided | result 
+-----------+--------------+------------------+--------------+--------
+ PENDING   |         4539 |             4539 |            0 | PASS
+ COMPLETED |       232615 |                0 |            0 | PASS
+ FAILED    |        12855 |            12855 |            0 | PASS
+ REVERSED  |            1 |                0 |            0 | PASS
+(4 rows)
+
+
+V5  Posting precision vs currency minor_unit (expect 0 violations)
+ precision_violations 
+----------------------
+                    0
+(1 row)
+
+
+V6  Non-positive postings (expect 0)
+ non_positive_amounts 
+----------------------
+                    0
+(1 row)
+
+
+V7  Currency mismatches between posting and account (expect 0)
+ currency_mismatches 
+---------------------
+                   0
+(1 row)
+
+
+V8  Append-only protection is active after the load
+               tgname                |      state       
+-------------------------------------+------------------
+ trg_ledger_entries_amount_precision | ENABLE ALWAYS
+ trg_ledger_entries_balanced         | enabled (origin)
+ trg_ledger_entries_no_update        | ENABLE ALWAYS
+ trg_ledger_entries_reversal_mirrors | enabled (origin)
+(4 rows)
+
+
+V9  Table and index sizes
+    relation    | table_size | index_size |  total  
+----------------+------------+------------+---------
+ ledger_entries | 42 MB      | 32 MB      | 73 MB
+ transactions   | 30 MB      | 14 MB      | 45 MB
+ customers      | 744 kB     | 872 kB     | 1616 kB
+ accounts       | 584 kB     | 744 kB     | 1328 kB
+ currencies     | 8192 bytes | 32 kB      | 40 kB
+ audit_logs     | 16 kB      | 16 kB      | 32 kB
+(6 rows)
+
+
+V10 Posting distribution across wallets (the skew the benchmark relies on)
+ wallets_with_activity | busiest | mean | median |        p99        | quietest 
+-----------------------+---------+------+--------+-------------------+----------
+                  5463 |   56297 |   63 |      8 | 644.5600000000068 |        1
+(1 row)
+
