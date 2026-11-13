@@ -55,8 +55,8 @@ not assumed away; they are measured in Portfolio 2.
 | # | Activity | Marks | Status |
 |---|---|---|---|
 | 1 | [Database Design and Modelling](portfolio-1-database-design/) | 7 | ✅ **Frozen** — reviewed, hardened, 21 tests |
-| 2 | [Query Processing and Optimisation](portfolio-2-query-optimisation/) | 7 | 🔸 Next |
-| 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | ⬜ Not started |
+| 2 | [Query Processing and Optimisation](portfolio-2-query-optimisation/) | 7 | ✅ Complete — 7 experiments, 528k rows |
+| 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | 🔸 Next |
 | 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | ⬜ Not started |
 | 5 | [Distributed and Cloud Database Exercise](portfolio-5-distributed-cloud/) | 6 | ⬜ Not started |
 | — | [Final Documentation](final-documentation/) | 6 | ⬜ Not started |
@@ -84,6 +84,13 @@ kineticspay-advanced-database-portfolio/
 │   └── evidence/
 │
 ├── portfolio-2-query-optimisation/
+│   ├── README.md
+│   ├── generate_data.py        fixed-seed, power-law dataset generator
+│   ├── load_data.sql           bulk load + post-load validation
+│   ├── run-benchmarks.sh       seven experiments
+│   ├── queries.sql             eight analytical queries
+│   ├── indexes.sql             recommended index set
+│   ├── performance-analysis.md full analysis
 │   ├── execution-plans/
 │   └── evidence/
 │
