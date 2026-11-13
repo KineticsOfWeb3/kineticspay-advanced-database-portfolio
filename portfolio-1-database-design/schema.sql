@@ -21,6 +21,10 @@ DROP TABLE IF EXISTS accounts           CASCADE;
 DROP TABLE IF EXISTS customers          CASCADE;
 DROP TABLE IF EXISTS currencies         CASCADE;
 
+DROP FUNCTION IF EXISTS fn_assert_transaction_posted()        CASCADE;
+DROP FUNCTION IF EXISTS fn_assert_reversal_mirrors_original() CASCADE;
+DROP FUNCTION IF EXISTS fn_assert_amount_precision()          CASCADE;
+
 DROP TYPE IF EXISTS entry_direction_t    CASCADE;
 DROP TYPE IF EXISTS account_type_t       CASCADE;
 DROP TYPE IF EXISTS account_status_t     CASCADE;
@@ -427,6 +431,228 @@ WHERE ab.account_type = 'CUSTOMER_WALLET';
 COMMENT ON VIEW wallets IS
     'Customer-facing wallet projection. Wallets are not a separate base '
     'table: they are the CUSTOMER_WALLET subtype of accounts.';
+
+
+-- ---------------------------------------------------------------------
+-- 12. HARDENING - gaps closed after design review
+--
+-- The constraints below were added after a deliberate adversarial review
+-- of the first version of this schema. Each one closes a hole that was
+-- demonstrated to exist by probing the running database; the probe
+-- output is preserved in evidence/design-review-probes.txt and the
+-- analysis is in design-review.md.
+-- ---------------------------------------------------------------------
+
+-- --- 12.1 A transaction's status must match its postings ------------
+--
+-- GAP FOUND: trg_ledger_entries_balanced fires on INSERT INTO
+-- ledger_entries. A transaction row inserted with status COMPLETED and
+-- NO entries at all therefore never invoked it, and committed happily -
+-- a completed payment that moved no money.
+--
+-- This trigger sits on transactions instead, so the check runs even when
+-- no posting is ever attempted. It also enforces the converse: a PENDING
+-- or FAILED transaction must NOT have posted to the ledger.
+CREATE OR REPLACE FUNCTION fn_assert_transaction_posted()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    v_count     INTEGER;
+    v_imbalance NUMERIC(20,4);
+BEGIN
+    SELECT COUNT(*),
+           COALESCE(SUM(CASE WHEN direction = 'DEBIT'
+                             THEN amount ELSE -amount END), 0)
+    INTO v_count, v_imbalance
+    FROM ledger_entries
+    WHERE transaction_id = NEW.transaction_id;
+
+    IF NEW.status IN ('COMPLETED', 'REVERSED') THEN
+        IF v_count < 2 THEN
+            RAISE EXCEPTION
+                'Transaction % is % but has only % ledger entry/entries; '
+                'a settled transaction must post at least two.',
+                NEW.transaction_reference, NEW.status, v_count
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF v_imbalance <> 0 THEN
+            RAISE EXCEPTION
+                'Transaction % is % and unbalanced by %.',
+                NEW.transaction_reference, NEW.status, v_imbalance
+                USING ERRCODE = 'check_violation';
+        END IF;
+    ELSE
+        -- PENDING or FAILED: value must not have moved.
+        IF v_count > 0 THEN
+            RAISE EXCEPTION
+                'Transaction % is % but has % ledger entry/entries; '
+                'an unsettled transaction must not post to the ledger.',
+                NEW.transaction_reference, NEW.status, v_count
+                USING ERRCODE = 'check_violation';
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$fn$;
+
+CREATE CONSTRAINT TRIGGER trg_transactions_posting_matches_status
+    AFTER INSERT OR UPDATE ON transactions
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_assert_transaction_posted();
+
+-- --- 12.2 A reversal must mirror the transaction it reverses --------
+--
+-- GAP FOUND: transactions_reversal_chk only required that a REVERSAL
+-- point at some prior transaction. Nothing tied the reversal's postings
+-- to the original's, so a REVERSAL could debit unrelated accounts for an
+-- unrelated amount and still be recorded as reversing a real payment.
+CREATE OR REPLACE FUNCTION fn_assert_reversal_mirrors_original()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    v_original    BIGINT;
+    v_orig_status transaction_status_t;
+    v_orig_ref    VARCHAR;
+    v_unmatched   INTEGER;
+BEGIN
+    SELECT t.reverses_transaction INTO v_original
+    FROM transactions t
+    WHERE t.transaction_id = NEW.transaction_id;
+
+    IF v_original IS NULL THEN
+        RETURN NULL;   -- not a reversal; nothing to check
+    END IF;
+
+    SELECT t.status, t.transaction_reference
+    INTO v_orig_status, v_orig_ref
+    FROM transactions t WHERE t.transaction_id = v_original;
+
+    IF v_orig_status <> 'REVERSED' THEN
+        RAISE EXCEPTION
+            'Transaction % is being reversed but is still marked %; '
+            'it must be set to REVERSED.', v_orig_ref, v_orig_status
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- Every original posting must have exactly one counterpart in the
+    -- reversal with the same account, the same amount and the opposite
+    -- direction - and vice versa. A FULL OUTER JOIN surfaces orphans on
+    -- either side.
+    SELECT COUNT(*) INTO v_unmatched
+    FROM (
+        SELECT account_id,
+               CASE WHEN direction = 'DEBIT' THEN 'CREDIT'::entry_direction_t
+                    ELSE 'DEBIT'::entry_direction_t END AS mirrored_direction,
+               amount
+        FROM ledger_entries WHERE transaction_id = v_original
+    ) o
+    FULL OUTER JOIN (
+        SELECT account_id, direction, amount
+        FROM ledger_entries WHERE transaction_id = NEW.transaction_id
+    ) r
+      ON  r.account_id = o.account_id
+      AND r.direction  = o.mirrored_direction
+      AND r.amount     = o.amount
+    WHERE o.account_id IS NULL OR r.account_id IS NULL;
+
+    IF v_unmatched > 0 THEN
+        RAISE EXCEPTION
+            'Reversal does not mirror original %: % unmatched posting(s). '
+            'A reversal must reproduce the original postings with debit '
+            'and credit sides swapped.', v_orig_ref, v_unmatched
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NULL;
+END;
+$fn$;
+
+CREATE CONSTRAINT TRIGGER trg_ledger_entries_reversal_mirrors
+    AFTER INSERT ON ledger_entries
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_assert_reversal_mirrors_original();
+
+-- --- 12.3 Posting precision must respect the currency ---------------
+--
+-- GAP FOUND: amount is NUMERIC(20,4), so a posting of 100.00019 NGN was
+-- silently rounded to 100.0002 and accepted - a sub-kobo balance that no
+-- settlement system can honour. The four decimal places exist for
+-- intermediate percentage-fee arithmetic, not for stored postings.
+CREATE OR REPLACE FUNCTION fn_assert_amount_precision()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    v_minor_unit SMALLINT;
+BEGIN
+    SELECT minor_unit INTO v_minor_unit
+    FROM currencies WHERE currency_code = NEW.currency_code;
+
+    IF NEW.amount <> round(NEW.amount, v_minor_unit) THEN
+        RAISE EXCEPTION
+            'Amount % is finer than % supports (% decimal place(s)).',
+            NEW.amount, NEW.currency_code, v_minor_unit
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NEW;
+END;
+$fn$;
+
+CREATE TRIGGER trg_ledger_entries_amount_precision
+    BEFORE INSERT ON ledger_entries
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_assert_amount_precision();
+
+-- --- 12.4 Append-only enforcement that survives replica mode --------
+--
+-- GAP FOUND: a session issuing
+--     SET session_replication_role = 'replica';
+-- suppressed the append-only trigger entirely and updated a committed
+-- ledger row. ENABLE ALWAYS makes the trigger fire in replica mode too.
+ALTER TABLE ledger_entries
+    ENABLE ALWAYS TRIGGER trg_ledger_entries_no_update;
+ALTER TABLE ledger_entries
+    ENABLE ALWAYS TRIGGER trg_ledger_entries_amount_precision;
+
+-- --- 12.5 Least-privilege application role --------------------------
+--
+-- Triggers are a control against mistakes, not against privilege. The
+-- table owner and any superuser can disable a trigger or drop it. The
+-- durable control is that the application never connects as the owner.
+--
+-- kineticspay_app can read everything and append to the ledger, but the
+-- UPDATE and DELETE privileges on ledger_entries are withheld at the
+-- grant level, so the restriction holds even if a trigger is dropped.
+DO $role$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kineticspay_app') THEN
+        CREATE ROLE kineticspay_app NOLOGIN;
+    END IF;
+END;
+$role$;
+
+GRANT USAGE ON SCHEMA public TO kineticspay_app;
+
+GRANT SELECT, INSERT, UPDATE ON customers    TO kineticspay_app;
+GRANT SELECT, INSERT, UPDATE ON accounts     TO kineticspay_app;
+GRANT SELECT, INSERT, UPDATE ON transactions TO kineticspay_app;
+GRANT SELECT                  ON currencies  TO kineticspay_app;
+
+-- The ledger: append and read only. No UPDATE, no DELETE, ever.
+GRANT SELECT, INSERT          ON ledger_entries TO kineticspay_app;
+REVOKE UPDATE, DELETE         ON ledger_entries FROM kineticspay_app;
+
+-- The audit trail: append and read only.
+GRANT SELECT, INSERT          ON audit_logs TO kineticspay_app;
+REVOKE UPDATE, DELETE         ON audit_logs FROM kineticspay_app;
+
+GRANT SELECT ON account_balances, wallets TO kineticspay_app;
 
 -- ---------------------------------------------------------------------
 -- NOTE ON INDEXES
