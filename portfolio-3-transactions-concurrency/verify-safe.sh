@@ -2,7 +2,7 @@
 # Verification of safe-transfer.sql under the same conditions that broke
 # every weaker control. Portfolio 3, KineticsPay.
 set -u
-PSQL="psql -h localhost -U postgres -d kineticspay -X"
+PSQL="psql -d kineticspay -X"
 WA=WAL-TEST-A-NGN; WB=WAL-TEST-B-NGN
 banner () { printf '\n==============================================================\n%s\n==============================================================\n' "$1"; }
 reset () { $PSQL -q -c "SELECT fn_reset_test_wallet('$WA',50000);" >/dev/null 2>&1; $PSQL -q -c "SELECT fn_reset_test_wallet('$WB',50000);" >/dev/null 2>&1; }

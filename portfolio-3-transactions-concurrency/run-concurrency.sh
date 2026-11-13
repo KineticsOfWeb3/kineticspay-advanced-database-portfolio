@@ -16,7 +16,7 @@
 # =====================================================================
 set -u
 
-PSQL="psql -h localhost -U postgres -d kineticspay -X"
+PSQL="psql -d kineticspay -X"
 OUT="evidence"
 mkdir -p "$OUT"
 
