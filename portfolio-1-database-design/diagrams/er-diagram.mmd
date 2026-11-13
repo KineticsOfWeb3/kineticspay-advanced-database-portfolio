@@ -1,0 +1,77 @@
+erDiagram
+    CUSTOMERS ||--o{ ACCOUNTS : "owns"
+    CURRENCIES ||--o{ ACCOUNTS : "denominates"
+    CURRENCIES ||--o{ TRANSACTIONS : "denominates"
+    CUSTOMERS ||--o{ TRANSACTIONS : "initiates"
+    TRANSACTIONS ||--o{ LEDGER_ENTRIES : "is posted as"
+    ACCOUNTS ||--o{ LEDGER_ENTRIES : "is debited or credited by"
+    TRANSACTIONS |o--o| TRANSACTIONS : "is reversed by"
+
+    CUSTOMERS {
+        bigint customer_id PK
+        varchar customer_reference UK
+        varchar first_name
+        varchar last_name
+        varchar email UK
+        varchar phone UK
+        date date_of_birth
+        enum kyc_tier
+        enum status
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    CURRENCIES {
+        char currency_code PK
+        varchar currency_name UK
+        smallint minor_unit
+        boolean is_active
+    }
+
+    ACCOUNTS {
+        bigint account_id PK
+        varchar account_reference UK
+        enum account_type
+        bigint customer_id FK "NULL for internal accounts"
+        char currency_code FK
+        enum normal_balance "DEBIT asset, CREDIT liability"
+        enum status
+        timestamptz opened_at
+        timestamptz closed_at
+    }
+
+    TRANSACTIONS {
+        bigint transaction_id PK
+        varchar transaction_reference UK
+        enum transaction_type
+        enum status
+        enum channel
+        char currency_code FK
+        bigint initiated_by_customer FK
+        bigint reverses_transaction FK "self-reference"
+        varchar narration
+        timestamptz initiated_at
+        timestamptz settled_at
+    }
+
+    LEDGER_ENTRIES {
+        bigint entry_id PK
+        bigint transaction_id FK
+        bigint account_id FK "composite FK with currency_code"
+        char currency_code FK
+        enum direction "DEBIT or CREDIT"
+        numeric amount "always positive"
+        timestamptz posted_at
+    }
+
+    AUDIT_LOGS {
+        bigint audit_id PK
+        varchar actor_type
+        bigint actor_id
+        varchar action
+        varchar entity_table
+        bigint entity_id
+        jsonb details
+        inet ip_address
+        timestamptz created_at
+    }
