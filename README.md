@@ -32,7 +32,7 @@ node failure? A ledger makes these concrete rather than hypothetical.
 | Layer | Technology | Used for |
 |---|---|---|
 | Relational store | PostgreSQL 16 | Schema design, SQL, transactions, concurrency control, indexing, query optimisation |
-| Document store | MongoDB | Transaction metadata and payment event documents (Portfolio 4) |
+| Document store | MongoDB document model | Transaction event metadata and the wallet read model (Portfolio 4). Executed against mongomock in this environment — see that activity's README |
 | Orchestration | Docker Compose | Reproducible environments; primary–replica replication (Portfolio 5) |
 | Data generation | Python 3 | Synthetic transaction volume for realistic query plans |
 | Version control | Git / GitHub | Progressive evidence of development |
@@ -57,8 +57,8 @@ not assumed away; they are measured in Portfolio 2.
 | 1 | [Database Design and Modelling](portfolio-1-database-design/) | 7 | ✅ **Frozen** — reviewed, hardened, 21 tests |
 | 2 | [Query Processing and Optimisation](portfolio-2-query-optimisation/) | 7 | ✅ Complete — 7 experiments, 528k rows |
 | 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | ✅ Complete — race reproduced and fixed |
-| 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | 🔸 Next |
-| 5 | [Distributed and Cloud Database Exercise](portfolio-5-distributed-cloud/) | 6 | ⬜ Not started |
+| 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | ✅ Complete — document model on real ledger data |
+| 5 | [Distributed and Cloud Database Exercise](portfolio-5-distributed-cloud/) | 6 | 🔸 Next |
 | — | [Final Documentation](final-documentation/) | 6 | ⬜ Not started |
 
 ---
@@ -104,6 +104,11 @@ kineticspay-advanced-database-portfolio/
 │   └── evidence/
 │
 ├── portfolio-4-nosql/
+│   ├── README.md
+│   ├── export_documents.py     builds documents from the PostgreSQL ledger
+│   ├── mongo_implementation.py validators, indexes, pipelines, concurrency
+│   ├── analysis.md             suitability argument
+│   ├── mongosh/                server-side scripts for Atlas or a replica set
 │   └── evidence/
 │
 ├── portfolio-5-distributed-cloud/
