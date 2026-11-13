@@ -58,8 +58,8 @@ INSERT 0 1
  
 (1 row)
 
-psql:verify.sql:63: ERROR:  Transaction 15 is unbalanced by 1000.0000; total debits must equal total credits.
-CONTEXT:  PL/pgSQL function fn_assert_transaction_balanced() line 22 at RAISE
+psql:verify.sql:63: ERROR:  Transaction KP-2026-999001 is COMPLETED and unbalanced by 1000.0000.
+CONTEXT:  PL/pgSQL function fn_assert_transaction_posted() line 22 at RAISE
 ROLLBACK
 
 ==============================================================
@@ -72,8 +72,8 @@ INSERT 0 1
  
 (1 row)
 
-psql:verify.sql:75: ERROR:  Transaction 16 has only 1 ledger entry/entries; double-entry requires at least two.
-CONTEXT:  PL/pgSQL function fn_assert_transaction_balanced() line 15 at RAISE
+psql:verify.sql:75: ERROR:  Transaction KP-2026-999002 is COMPLETED but has only 1 ledger entry/entries; a settled transaction must post at least two.
+CONTEXT:  PL/pgSQL function fn_assert_transaction_posted() line 15 at RAISE
 ROLLBACK
 
 ==============================================================
@@ -107,7 +107,7 @@ TEST 9  NEGATIVE - an internal account may not have an owner
 ==============================================================
 BEGIN
 psql:verify.sql:118: ERROR:  new row for relation "accounts" violates check constraint "accounts_ownership_chk"
-DETAIL:  Failing row contains (15, ACC-BAD-001, FEE_REVENUE, 1, NGN, CREDIT, ACTIVE, 2026-11-13 08:36:52.827193+01, null).
+DETAIL:  Failing row contains (13, ACC-BAD-001, FEE_REVENUE, 1, NGN, CREDIT, ACTIVE, 2026-11-13 08:49:29.605508+01, null).
 ROLLBACK
 
 ==============================================================
@@ -124,7 +124,7 @@ TEST 11 NEGATIVE - a negative posting amount must be rejected
 BEGIN
 INSERT 0 1
 psql:verify.sql:140: ERROR:  new row for relation "ledger_entries" violates check constraint "ledger_entries_amount_positive_chk"
-DETAIL:  Failing row contains (27, 18, 5, NGN, CREDIT, -5000.0000, 2026-11-13 08:36:52.828105+01).
+DETAIL:  Failing row contains (22, 14, 5, NGN, CREDIT, -5000.0000, 2026-11-13 08:49:29.606511+01).
 CONTEXT:  SQL function "fn_post_entry" statement 1
 ROLLBACK
 
@@ -135,4 +135,110 @@ TEST 12 Reversal integrity - original and correction both survive
 ----------------+-----------------+----------------+----------------------
  KP-2026-000007 | REVERSED        | KP-2026-000008 |               0.0000
 (1 row)
+
+
+==============================================================
+TEST 13 NEGATIVE - a COMPLETED transaction with NO postings
+        (the gap found in design review: a settled payment
+         that moved no money used to commit successfully)
+==============================================================
+BEGIN
+INSERT 0 1
+psql:verify.sql:167: ERROR:  Transaction KP-2026-999005 is COMPLETED but has only 0 ledger entry/entries; a settled transaction must post at least two.
+CONTEXT:  PL/pgSQL function fn_assert_transaction_posted() line 15 at RAISE
+ROLLBACK
+
+==============================================================
+TEST 14 NEGATIVE - a FAILED transaction must not post value
+==============================================================
+BEGIN
+INSERT 0 1
+ fn_post_entry 
+---------------
+ 
+(1 row)
+
+ fn_post_entry 
+---------------
+ 
+(1 row)
+
+psql:verify.sql:180: ERROR:  Transaction KP-2026-999006 is FAILED but has 2 ledger entry/entries; an unsettled transaction must not post to the ledger.
+CONTEXT:  PL/pgSQL function fn_assert_transaction_posted() line 30 at RAISE
+ROLLBACK
+
+==============================================================
+TEST 15 NEGATIVE - replica mode must not bypass append-only
+        (session_replication_role previously suppressed the
+         trigger and allowed a committed posting to be edited)
+==============================================================
+BEGIN
+SET
+psql:verify.sql:191: ERROR:  ledger_entries is append-only; use a REVERSAL transaction instead of UPDATE
+CONTEXT:  PL/pgSQL function fn_forbid_ledger_mutation() line 3 at RAISE
+ROLLBACK
+
+==============================================================
+TEST 16 NEGATIVE - sub-kobo precision must be rejected
+        (NGN declares minor_unit = 2)
+==============================================================
+BEGIN
+INSERT 0 1
+psql:verify.sql:203: ERROR:  Amount 100.0002 is finer than NGN supports (2 decimal place(s)).
+CONTEXT:  PL/pgSQL function fn_assert_amount_precision() line 9 at RAISE
+SQL function "fn_post_entry" statement 1
+ROLLBACK
+
+==============================================================
+TEST 17 NEGATIVE - a reversal must mirror its original
+        (debits unrelated accounts for an unrelated amount)
+==============================================================
+BEGIN
+UPDATE 1
+INSERT 0 1
+ fn_post_entry 
+---------------
+ 
+(1 row)
+
+ fn_post_entry 
+---------------
+ 
+(1 row)
+
+psql:verify.sql:221: ERROR:  Reversal does not mirror original KP-2026-000001: 4 unmatched posting(s). A reversal must reproduce the original postings with debit and credit sides swapped.
+CONTEXT:  PL/pgSQL function fn_assert_reversal_mirrors_original() line 49 at RAISE
+ROLLBACK
+
+==============================================================
+TEST 18 POSITIVE - a correctly mirrored reversal is accepted
+==============================================================
+BEGIN
+UPDATE 1
+INSERT 0 1
+ fn_post_entry 
+---------------
+ 
+(1 row)
+
+ fn_post_entry 
+---------------
+ 
+(1 row)
+
+SET CONSTRAINTS
+>>> accepted (no error above)
+ROLLBACK
+
+==============================================================
+TEST 19 Privilege check - kineticspay_app cannot UPDATE/DELETE
+        the ledger even if every trigger were dropped
+==============================================================
+ privilege_type | granted 
+----------------+---------
+ SELECT         | t
+ INSERT         | t
+ UPDATE         | f
+ DELETE         | f
+(4 rows)
 

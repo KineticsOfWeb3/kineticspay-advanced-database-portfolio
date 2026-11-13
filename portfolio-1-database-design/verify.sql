@@ -153,3 +153,98 @@ FROM transactions rev
 JOIN transactions orig ON orig.transaction_id = rev.reverses_transaction
 JOIN ledger_entries le ON le.transaction_id IN (orig.transaction_id, rev.transaction_id)
 GROUP BY orig.transaction_reference, orig.status, rev.transaction_reference;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 13 NEGATIVE - a COMPLETED transaction with NO postings'
+\echo '        (the gap found in design review: a settled payment'
+\echo '         that moved no money used to commit successfully)'
+\echo '=============================================================='
+BEGIN;
+INSERT INTO transactions (transaction_reference, transaction_type, status,
+                          currency_code, narration, settled_at)
+VALUES ('KP-2026-999005', 'TRANSFER', 'COMPLETED', 'NGN', 'Empty but completed', now());
+SET CONSTRAINTS ALL IMMEDIATE;
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 14 NEGATIVE - a FAILED transaction must not post value'
+\echo '=============================================================='
+BEGIN;
+INSERT INTO transactions (transaction_reference, transaction_type, status,
+                          currency_code, narration, settled_at)
+VALUES ('KP-2026-999006', 'TRANSFER', 'FAILED', 'NGN', 'Failed yet posted', now());
+SELECT fn_post_entry('KP-2026-999006', 'WAL-CUS-000001-NGN', 'DEBIT',  1000.00);
+SELECT fn_post_entry('KP-2026-999006', 'WAL-CUS-000002-NGN', 'CREDIT', 1000.00);
+SET CONSTRAINTS ALL IMMEDIATE;
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 15 NEGATIVE - replica mode must not bypass append-only'
+\echo '        (session_replication_role previously suppressed the'
+\echo '         trigger and allowed a committed posting to be edited)'
+\echo '=============================================================='
+BEGIN;
+SET LOCAL session_replication_role = 'replica';
+UPDATE ledger_entries SET amount = 999999.00 WHERE entry_id = 1;
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 16 NEGATIVE - sub-kobo precision must be rejected'
+\echo '        (NGN declares minor_unit = 2)'
+\echo '=============================================================='
+BEGIN;
+INSERT INTO transactions (transaction_reference, transaction_type, status,
+                          currency_code, narration, settled_at)
+VALUES ('KP-2026-999007', 'DEPOSIT', 'COMPLETED', 'NGN', 'Sub-kobo amount', now());
+SELECT fn_post_entry('KP-2026-999007', 'ACC-BANK-NGN', 'DEBIT', 100.00019);
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 17 NEGATIVE - a reversal must mirror its original'
+\echo '        (debits unrelated accounts for an unrelated amount)'
+\echo '=============================================================='
+BEGIN;
+UPDATE transactions SET status = 'REVERSED'
+WHERE transaction_reference = 'KP-2026-000001';
+INSERT INTO transactions (transaction_reference, transaction_type, status, currency_code,
+                          reverses_transaction, narration, settled_at)
+SELECT 'KP-2026-999008', 'REVERSAL', 'COMPLETED', 'NGN', t.transaction_id,
+       'Bogus reversal', now()
+FROM transactions t WHERE t.transaction_reference = 'KP-2026-000001';
+SELECT fn_post_entry('KP-2026-999008', 'WAL-CUS-000002-NGN', 'DEBIT',  7.00);
+SELECT fn_post_entry('KP-2026-999008', 'ACC-FEES-NGN',       'CREDIT', 7.00);
+SET CONSTRAINTS ALL IMMEDIATE;
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 18 POSITIVE - a correctly mirrored reversal is accepted'
+\echo '=============================================================='
+BEGIN;
+UPDATE transactions SET status = 'REVERSED'
+WHERE transaction_reference = 'KP-2026-000005';
+INSERT INTO transactions (transaction_reference, transaction_type, status, currency_code,
+                          reverses_transaction, narration, settled_at)
+SELECT 'KP-2026-999009', 'REVERSAL', 'COMPLETED', 'NGN', t.transaction_id,
+       'Correct mirror of KP-2026-000005', now()
+FROM transactions t WHERE t.transaction_reference = 'KP-2026-000005';
+-- original was: DEBIT wallet 20,000 / CREDIT bank 20,000  -> mirror swaps both
+SELECT fn_post_entry('KP-2026-999009', 'WAL-CUS-000002-NGN', 'CREDIT', 20000.00);
+SELECT fn_post_entry('KP-2026-999009', 'ACC-BANK-NGN',       'DEBIT',  20000.00);
+SET CONSTRAINTS ALL IMMEDIATE;
+\echo '>>> accepted (no error above)'
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 19 Privilege check - kineticspay_app cannot UPDATE/DELETE'
+\echo '        the ledger even if every trigger were dropped'
+\echo '=============================================================='
+SELECT privilege_type,
+       has_table_privilege('kineticspay_app', 'ledger_entries', privilege_type) AS granted
+FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS p(privilege_type);
