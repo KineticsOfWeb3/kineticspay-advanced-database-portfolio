@@ -1,0 +1,21 @@
+/home/claude/kineticspay-advanced-database-portfolio/portfolio-4-nosql/export_documents.py:229: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "snapshot_at": datetime.utcnow().isoformat(),
+reading up to 50,000 transactions from PostgreSQL ...
+building wallet snapshots ...
+
+seed                : 8103
+transaction_events  : 50,000 documents
+wallet_snapshots    : 5,508 documents
+
+Field presence across transaction_events (the heterogeneity):
+  latency_ms                    49,111  ( 98.2%)
+  metadata.device               39,989  ( 80.0%)
+  metadata.network              29,055  ( 58.1%)
+  metadata.three_d_secure       10,934  ( 21.9%)
+  metadata.risk                  9,169  ( 18.3%)
+  metadata.ussd                  7,019  ( 14.0%)
+  metadata.api                   2,991  (  6.0%)
+  metadata.failure               2,632  (  5.3%)
+  metadata.compliance              634  (  1.3%)
+
+  documents with NO device block : 10,011 (20.0%)  <- USSD and API have no device

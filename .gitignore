@@ -26,3 +26,6 @@ node_modules/
 
 # Portfolio 2 generated dataset (reproducible from generate_data.py, seed 8103)
 portfolio-2-query-optimisation/data/
+
+# Portfolio 4 generated documents (reproducible from export_documents.py)
+portfolio-4-nosql/data/
