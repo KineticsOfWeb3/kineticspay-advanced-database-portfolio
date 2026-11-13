@@ -1,0 +1,25 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Secrets and local environment
+.env
+*.local
+**/credentials.json
+
+# PostgreSQL / dump artefacts
+*.dump
+*.backup
+pgdata/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Node (mermaid-cli)
+node_modules/
