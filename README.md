@@ -54,7 +54,7 @@ not assumed away; they are measured in Portfolio 2.
 
 | # | Activity | Marks | Status |
 |---|---|---|---|
-| 1 | [Database Design and Modelling](portfolio-1-database-design/) | 7 | ✅ Complete |
+| 1 | [Database Design and Modelling](portfolio-1-database-design/) | 7 | ✅ Complete — reviewed and hardened |
 | 2 | [Query Processing and Optimisation](portfolio-2-query-optimisation/) | 7 | ⬜ Not started |
 | 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | ⬜ Not started |
 | 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | ⬜ Not started |
@@ -75,9 +75,10 @@ kineticspay-advanced-database-portfolio/
 │   ├── case-study.md
 │   ├── schema.sql              DDL: types, tables, constraints, triggers, views
 │   ├── seed.sql                representative data
-│   ├── verify.sql              12-test integrity suite
+│   ├── verify.sql              19-test integrity suite
 │   ├── normalisation.md        UNF → 1NF → 2NF → 3NF → BCNF + denormalisation
 │   ├── relationships.md        keys, foreign keys, constraint inventory
+│   ├── design-review.md        adversarial review: four gaps found and closed
 │   ├── diagrams/
 │   └── evidence/
 │

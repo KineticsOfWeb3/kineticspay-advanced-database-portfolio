@@ -18,6 +18,7 @@
 | Constraints | [`relationships.md`](relationships.md) §4 |
 | Normalisation explanation | [`normalisation.md`](normalisation.md) |
 | Execution evidence | [`evidence/verify-output.txt`](evidence/verify-output.txt) |
+| Adversarial design review | [`design-review.md`](design-review.md) |
 
 ---
 
@@ -64,10 +65,12 @@ and recreates every object, so it can be re-run during development.
 
 ## How it was tested
 
-`verify.sql` contains twelve tests. Three are positive (balances compute
-correctly, the trial balance nets to zero, each transaction balances) and nine
-are **negative** — each one attempts an operation that must fail, and the
+`verify.sql` contains nineteen tests. Five are positive and **fourteen are
+negative** — each negative test attempts an operation that must fail, and the
 captured output shows the database rejecting it.
+
+Tests 13–19 were added after an adversarial design review that found four real
+holes in the first version of the schema. See [`design-review.md`](design-review.md).
 
 The negative tests matter more than the positive ones. They demonstrate that
 the integrity rules are enforced by the **engine**, not by application code
@@ -89,6 +92,13 @@ that a future developer could bypass.
 | 10 | Second NGN wallet for the same customer | ✅ rejected — partial unique index |
 | 11 | Negative posting amount | ✅ rejected — `ledger_entries_amount_positive_chk` |
 | 12 | Reversal: original and correction both persist, net ledger effect zero | ✅ |
+| **13** | COMPLETED transaction with zero postings | ✅ rejected — *"is COMPLETED but has only 0 ledger entry/entries"* |
+| **14** | FAILED transaction that posted value | ✅ rejected — *"an unsettled transaction must not post to the ledger"* |
+| **15** | `session_replication_role = 'replica'` bypass of append-only | ✅ rejected |
+| **16** | Sub-kobo amount (NGN declares `minor_unit = 2`) | ✅ rejected — *"100.0002 is finer than NGN supports"* |
+| **17** | Reversal that does not mirror its original | ✅ rejected — *"4 unmatched posting(s)"* |
+| **18** | Correctly mirrored reversal | ✅ accepted |
+| **19** | `kineticspay_app` holds SELECT/INSERT but not UPDATE/DELETE on the ledger | ✅ verified |
 
 ### A note on Test 4 and Test 5
 
@@ -127,7 +137,14 @@ structurally impossible rather than merely discouraged.
 posted as compensating `REVERSAL` transactions, preserving the full history —
 which is what an auditor, and the Nigeria Data Protection Act 2023, require.
 
-**6. No secondary indexes.**
+**6. Defence in depth on the ledger, not just a trigger.**
+`ENABLE ALWAYS` makes the append-only trigger fire even in replica mode, and
+the `kineticspay_app` role is never granted `UPDATE` or `DELETE` on
+`ledger_entries` at all — so the restriction survives even if every trigger
+were dropped. A trigger is a control against mistakes; a grant is a control
+against privilege.
+
+**7. No secondary indexes.**
 `schema.sql` creates only the indexes implied by `PRIMARY KEY` and `UNIQUE`.
 This is deliberate: Portfolio 2 measures query performance against this
 baseline and then introduces indexes, so the before/after execution plans
@@ -143,14 +160,16 @@ portfolio-1-database-design/
 ├── case-study.md           organisation, users, data, operations
 ├── schema.sql              DDL: types, tables, constraints, triggers, views
 ├── seed.sql                representative data (6 customers, 10 transactions)
-├── verify.sql              12-test integrity suite
+├── verify.sql              19-test integrity suite
 ├── normalisation.md        UNF → 1NF → 2NF → 3NF → BCNF, plus denormalisation
 ├── relationships.md        keys, foreign keys, constraint inventory
+├── design-review.md        four gaps found by adversarial probing, and their fixes
 ├── diagrams/
 │   ├── er-diagram.mmd      Mermaid source
 │   └── er-diagram.png      rendered diagram
 └── evidence/
-    └── verify-output.txt   captured psql output of all 12 tests
+    ├── verify-output.txt            captured psql output of all 19 tests
+    └── design-review-probes.txt     the four probes that found the gaps
 ```
 
 ---
