@@ -1,0 +1,250 @@
+/home/claude/kineticspay-advanced-database-portfolio/portfolio-4-nosql/mongo_implementation.py:168: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  print(f"  run at              : {datetime.utcnow().isoformat()}Z")
+
+==============================================================
+ENGINE AND PROVENANCE
+==============================================================
+  engine              : mongomock 4.3.0 (in-memory, pymongo-compatible)
+  why not mongod      : binaries unreachable from this sandbox; see the module docstring
+  documents           : derived from the PostgreSQL ledger of Portfolios 1-3
+  transaction_events  : 50,000
+  wallet_snapshots    : 5,508
+  run at              : 2026-11-13T09:07:11.542064Z
+
+==============================================================
+1. SCHEMA VALIDATION
+==============================================================
+  MongoDB is schema-FLEXIBLE, not schema-LESS. A payment event
+  collection still needs rules; what it does not need is a fixed column
+  for every optional field.
+
+  The $jsonSchema validator is in mongosh/01-create-collections.js and
+  is reproduced here as an equivalent JSON Schema, checked against every
+  document rather than only those a server rejects.
+
+  documents validated : 50,000
+  violations          : 0
+
+  Negative control - three deliberately invalid documents:
+    malformed _id                    -> REJECTED (1 violation(s)): 'NOT-A-REF' does not match '^KP-[0-9]{4}-[0-9]{6}$'
+    unknown type                     -> REJECTED (1 violation(s)): 'TELEPORT' is not one of ['DEPOSIT', 'WITHDRAWAL', 'TRANSFER
+    negative amount + bad channel    -> REJECTED (2 violation(s)): -5.0 is less than the minimum of 0
+
+==============================================================
+2. LOAD AND INDEX
+==============================================================
+  transaction_events indexes:
+    _id_
+    customer_recent
+    status_recent
+    channel
+    risk_action
+  wallet_snapshots indexes:
+    _id_
+    customer_ref
+
+  Note 'risk_action' is SPARSE: only 18% of events carry a risk block,
+  so the index holds only those documents. The relational equivalent in
+  Portfolio 2 was a PARTIAL index on transactions(status) - the same
+  idea reached from a different direction.
+
+==============================================================
+3. QUERIES THE DOCUMENT MODEL MAKES EASY
+==============================================================
+  3.1  Events from Android devices on 5G  (no join, no schema change)
+  {"amount": 0.0, "metadata": {"device": {"app_version": "4.6.12"}}, "_id": "KP-2026-000010"}
+  {"amount": 10351.34, "metadata": {"device": {"app_version": "4.4.2"}}, "_id": "KP-2026-000012"}
+  {"amount": 29938.11, "metadata": {"device": {"app_version": "4.6.20"}}, "_id": "KP-2026-000020"}
+
+  3.2  High-risk events that were challenged
+  {"amount": 0.0, "metadata": {"risk": {"score": 92.0, "signals": ["LARGE_AMOUNT"], "action": "CHALLENGE"}}, "_id": "KP-2026-000197"}
+  {"amount": 0.0, "metadata": {"risk": {"score": 91.8, "signals": ["LARGE_AMOUNT", "NEW_DEVICE"], "action": "CHALLENGE"}}, "_id": "KP-2026-000366"}
+  {"amount": 15788.44, "metadata": {"risk": {"score": 93.7, "signals": ["VELOCITY", "GEO_MISMATCH", "NIGHT_HOURS"], "action": "CHALLENGE"}}, "_id": "KP-2026-000636"}
+
+  3.3  Events carrying a specific risk signal (array membership)
+  {"metadata": {"risk": {"signals": ["LARGE_AMOUNT", "GEO_MISMATCH"]}}, "_id": "KP-2026-000017"}
+  {"metadata": {"risk": {"signals": ["GEO_MISMATCH", "LARGE_AMOUNT", "NIGHT_HOURS"]}}, "_id": "KP-2026-000020"}
+  {"metadata": {"risk": {"signals": ["NIGHT_HOURS", "NEW_BENEFICIARY", "GEO_MISMATCH"]}}, "_id": "KP-2026-000044"}
+
+  3.4  3-D Secure failures on web (a field that exists only for WEB)
+  {"metadata": {"three_d_secure": {"attempted": true, "outcome": "FAILED", "version": "2.2.0"}}, "_id": "KP-2026-000083"}
+  {"metadata": {"three_d_secure": {"attempted": true, "outcome": "FAILED", "version": "2.2.0"}}, "_id": "KP-2026-000093"}
+  {"metadata": {"three_d_secure": {"attempted": true, "outcome": "FAILED", "version": "2.1.0"}}, "_id": "KP-2026-000098"}
+
+  Each of these reaches into a field that exists on only a subset of
+  documents. In the relational schema every one would need either a
+  nullable column, a side table, or a JSONB column queried with ->> -
+  and the first two change the schema for every row.
+
+==============================================================
+4. AGGREGATION PIPELINES
+==============================================================
+  4.1  Failure rate by channel  (compare: Portfolio 2 queries.sql Q5)
+  {"attempted": 29055, "failed": 1508, "_id": "MOBILE_APP", "failure_rate_pct": 5.19, "avg_value": 25247.56}
+  {"attempted": 10934, "failed": 576, "_id": "WEB", "failure_rate_pct": 5.27, "avg_value": 25787.66}
+  {"attempted": 7019, "failed": 382, "_id": "USSD", "failure_rate_pct": 5.44, "avg_value": 25142.11}
+  {"attempted": 2991, "failed": 166, "_id": "API", "failure_rate_pct": 5.55, "avg_value": 25116.61}
+  {"attempted": 1, "failed": 0, "_id": "INTERNAL", "failure_rate_pct": 0.0, "avg_value": 10000.0}
+
+  4.2  Monthly volume by type  (compare: Q2)
+  {"n": 5, "value": 125535.14, "_id": {"month": "2026-11", "type": "TRANSFER"}}
+  {"n": 3, "value": 36231.85, "_id": {"month": "2026-11", "type": "WITHDRAWAL"}}
+  {"n": 2, "value": 11500.0, "_id": {"month": "2026-11", "type": "DEPOSIT"}}
+  {"n": 1, "value": 10000.0, "_id": {"month": "2026-11", "type": "REVERSAL"}}
+  {"n": 3169, "value": 78986249.93, "_id": {"month": "2026-10", "type": "TRANSFER"}}
+  {"n": 2319, "value": 58588234.4, "_id": {"month": "2026-10", "type": "DEPOSIT"}}
+  {"n": 1328, "value": 34800581.83, "_id": {"month": "2026-10", "type": "WITHDRAWAL"}}
+  {"n": 3058, "value": 79512972.46, "_id": {"month": "2026-09", "type": "TRANSFER"}}
+
+  4.3  Decline reasons ranked  (NO relational equivalent without a side table)
+  {"n": 458, "retryable": 280, "value_lost": 0.0, "_id": "CARD_EXPIRED"}
+  {"n": 457, "retryable": 247, "value_lost": 0.0, "_id": "ISSUER_UNAVAILABLE"}
+  {"n": 455, "retryable": 260, "value_lost": 0.0, "_id": "SUSPECTED_FRAUD"}
+  {"n": 435, "retryable": 275, "value_lost": 0.0, "_id": "INSUFFICIENT_FUNDS"}
+  {"n": 418, "retryable": 233, "value_lost": 0.0, "_id": "DO_NOT_HONOUR"}
+  {"n": 409, "retryable": 245, "value_lost": 0.0, "_id": "LIMIT_EXCEEDED"}
+
+  4.4  Risk signals unwound from their array
+  {"n": 3085, "avg_score": 50.77, "_id": "NIGHT_HOURS"}
+  {"n": 3069, "avg_score": 50.31, "_id": "LARGE_AMOUNT"}
+  {"n": 3063, "avg_score": 49.66, "_id": "GEO_MISMATCH"}
+  {"n": 3062, "avg_score": 49.34, "_id": "NEW_DEVICE"}
+  {"n": 3052, "avg_score": 49.24, "_id": "VELOCITY"}
+  {"n": 3047, "avg_score": 50.05, "_id": "NEW_BENEFICIARY"}
+
+  4.5  Settlement latency percentiles by channel
+  {"n": 10175, "avg_ms": 453273.12, "max_ms": 900000, "min_ms": 2000, "_id": "WEB"}
+  {"n": 27014, "avg_ms": 452836.79, "max_ms": 900000, "min_ms": 2000, "_id": "MOBILE_APP"}
+  {"n": 6509, "avg_ms": 448057.15, "max_ms": 900000, "min_ms": 2000, "_id": "USSD"}
+  {"n": 2779, "avg_ms": 444890.25, "max_ms": 900000, "min_ms": 2000, "_id": "API"}
+  {"n": 1, "avg_ms": 240000.0, "max_ms": 240000, "min_ms": 240000, "_id": "INTERNAL"}
+
+  4.6  $facet - several independent summaries in ONE pass over the data
+    by_status:
+      {"n": 46478, "_id": "COMPLETED"}
+      {"n": 2632, "_id": "FAILED"}
+      {"n": 889, "_id": "PENDING"}
+      {"n": 1, "_id": "REVERSED"}
+    by_currency:
+      {"n": 47011, "_id": "NGN"}
+      {"n": 2989, "_id": "USD"}
+    biometric_adoption:
+      {"n": 8002, "_id": false}
+      {"n": 21053, "_id": true}
+    compliance_flagged:
+      {"n": 634}
+
+  4.7  $lookup - joining events to wallet snapshots
+  {"_id": "WAL-CUS-002169-NGN", "customer": {"name": "Aisha Nwosu"}, "balance": 92666185.67, "posting_count": 56297, "api_event_count": 0}
+  {"_id": "WAL-CUS-003507-NGN", "customer": {"name": "Hauwa Madu"}, "balance": 68574093.97, "posting_count": 26688, "api_event_count": 0}
+  {"_id": "WAL-CUS-003095-NGN", "customer": {"name": "Adaeze Bello"}, "balance": 51735431.47, "posting_count": 16808, "api_event_count": 0}
+    ($lookup works, but note it found nothing to join on here - the
+     fields are not related. That is the point of 4.8.)
+
+  4.8  The embedded read model: one lookup serves the whole home screen
+    _id              : WAL-CUS-000007-NGN
+    customer         : Chinelo Garba
+    balance          : 160,933.56 NGN
+    recent_activity  : 5 embedded postings
+    documents read   : 1
+    relational equiv : wallets view (aggregate over ledger_entries)
+                       + join customers + top-5 postings = 3 relations
+
+==============================================================
+5. EMBEDDING VERSUS REFERENCING
+==============================================================
+  The same information, modelled two ways, measured on document size
+  and read count.
+
+    wallet_snapshots (embedded recent activity)
+      mean document size  : 829 bytes
+      max  document size  : 902 bytes
+      reads for home screen: 1
+
+    transaction_events (referenced by customer_id)
+      mean document size  : 767 bytes
+      max  document size  : 963 bytes
+      reads for full history: 1 query, N documents
+
+    Why recent_activity is capped at 5 and not unbounded:
+      busiest wallet has 56,297 postings.
+      Embedding all of them would put that wallet's document at roughly
+      6.4 MB, against MongoDB's hard 16 MB
+      document limit - and every balance read would transfer all of it.
+
+    This is the unbounded-array anti-pattern. The rule applied here: embed
+    what is read TOGETHER and bounded; reference what GROWS.
+
+==============================================================
+6. CONCURRENCY: WHAT SINGLE-DOCUMENT ATOMICITY BUYS
+==============================================================
+  Portfolio 3 demonstrated a real double-spend race against
+  PostgreSQL using two concurrent processes. What follows is NOT a
+  wall-clock race - mongomock is in-process and single-threaded, so a
+  genuine race cannot be staged here. It demonstrates the SEMANTICS of
+  MongoDB's guarantee, executed, with the limits stated.
+
+  6.1  Guarded update - the compare-and-set that DOES work
+       update_one({_id, balance: {$gte: 35000}}, {$inc: {balance: -35000}})
+       withdrawal 1: matched=1 modified=1 -> APPLIED, balance now 15,000.00
+       withdrawal 2: matched=0 modified=0 -> REFUSED (guard failed), balance now 15,000.00
+
+       The filter and the update are ONE atomic operation on ONE
+       document. A second writer cannot slip between the read and the
+       write, because there is no gap: there is no separate read. This
+       is genuinely strong, and it is the idiomatic MongoDB answer to
+       the Portfolio 3 race.
+
+  6.2  Where it stops working: a transfer touches TWO documents
+       before: A=50,000.00  B=10,000.00  total=60,000.00
+       step 1 debit A 20,000 : modified=1
+       step 2 credit B 20,000: modified=0  <-- FAILED (recipient missing)
+       after : A=30,000.00  B=10,000.00  total=40,000.00
+       NGN 20,000.00 HAS BEEN DESTROYED.
+
+       Step 1 committed. Step 2 failed. There is no enclosing
+       transaction to roll step 1 back, so the money is simply gone.
+       The relational ledger cannot reach this state: trg_ledger_entries
+       _balanced rejects any transaction whose debits and credits do not
+       sum to zero, at COMMIT.
+
+  6.3  What MongoDB actually offers here - stated accurately
+
+       It is NOT true that MongoDB has no multi-document transactions.
+       Since 4.0 it supports multi-document ACID transactions on replica
+       sets, and since 4.2 across sharded clusters. The accurate claims
+       are narrower:
+
+         * Single-document atomicity is the DEFAULT and the idiomatic
+           design target. Multi-document transactions are an escape
+           hatch that the data model is supposed to make unnecessary.
+         * They require a replica set; a standalone mongod cannot run
+           them.
+         * They carry real cost: a 60-second default runtime limit,
+           WiredTiger cache pressure, and under contention a
+           TransientTransactionError the application must retry - the
+           same retry obligation SERIALIZABLE imposed in Portfolio 3.
+         * mongomock implements none of this, so this script CANNOT
+           demonstrate it. That is a limitation of the evidence here,
+           not a claim about MongoDB.
+
+       The design conclusion stands either way: if a workload needs
+       multi-document transactions constantly, the document model is
+       being used against its grain, and the ledger belongs in
+       PostgreSQL. See analysis.md section 5.
+
+==============================================================
+7. COLLECTION STATISTICS
+==============================================================
+  transaction_events       50,000 documents
+  wallet_snapshots          5,508 documents
+
+  status distribution:
+  {"n": 46478, "_id": "COMPLETED"}
+  {"n": 2632, "_id": "FAILED"}
+  {"n": 889, "_id": "PENDING"}
+  {"n": 1, "_id": "REVERSED"}
+
+==============================================================
+run complete
+==============================================================
