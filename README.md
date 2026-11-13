@@ -56,8 +56,8 @@ not assumed away; they are measured in Portfolio 2.
 |---|---|---|---|
 | 1 | [Database Design and Modelling](portfolio-1-database-design/) | 7 | ✅ **Frozen** — reviewed, hardened, 21 tests |
 | 2 | [Query Processing and Optimisation](portfolio-2-query-optimisation/) | 7 | ✅ Complete — 7 experiments, 528k rows |
-| 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | 🔸 Next |
-| 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | ⬜ Not started |
+| 3 | [Transactions and Concurrency](portfolio-3-transactions-concurrency/) | 7 | ✅ Complete — race reproduced and fixed |
+| 4 | [NoSQL and Advanced Data Models](portfolio-4-nosql/) | 7 | 🔸 Next |
 | 5 | [Distributed and Cloud Database Exercise](portfolio-5-distributed-cloud/) | 6 | ⬜ Not started |
 | — | [Final Documentation](final-documentation/) | 6 | ⬜ Not started |
 
@@ -95,6 +95,12 @@ kineticspay-advanced-database-portfolio/
 │   └── evidence/
 │
 ├── portfolio-3-transactions-concurrency/
+│   ├── README.md
+│   ├── setup.sql               test fixtures and deliberately unsafe helpers
+│   ├── run-concurrency.sh      phases 0-6, two concurrent sessions
+│   ├── safe-transfer.sql       lock ordering, safe withdraw/transfer, backstop
+│   ├── verify-safe.sh          re-tests under every race that broke the rest
+│   ├── analysis.md             full analysis
 │   └── evidence/
 │
 ├── portfolio-4-nosql/
