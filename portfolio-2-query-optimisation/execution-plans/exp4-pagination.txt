@@ -278,3 +278,124 @@ cursor value from row 50,000: 2026-03-20 11:44:06.790623+01
  Execution Time: 0.338 ms
 (9 rows)
 
+
+==============================================================
+4C - CORRECTION: the keyset cursor needs a tie-breaker
+==============================================================
+The keyset query in 4B used a single-column cursor:
+
+    WHERE account_id = :a AND posted_at < :last_seen
+    ORDER BY posted_at DESC LIMIT 50
+
+That is WRONG when two postings share a timestamp, which this dataset does:
+4 (account, posted_at) groups contain more than one row, the worst holding 6.
+Both sides of a transfer are posted with the same settled_at, so collisions
+are structural, not accidental.
+
+With a strict '<' the page boundary SKIPS every tied row. With '<=' it
+REPEATS them. Either way the user sees a corrupted statement.
+
+Demonstrated on account 1 at timestamp 2026-11-13 09:04:12.926938+01
+
+--- rows sharing that timestamp ---
+ entry_id | direction |   amount    |           posted_at           
+----------+-----------+-------------+-------------------------------
+        1 | DEBIT     |  50000.0000 | 2026-11-13 09:04:12.926938+01
+        3 | DEBIT     | 120000.0000 | 2026-11-13 09:04:12.926938+01
+        5 | DEBIT     |  75500.5000 | 2026-11-13 09:04:12.926938+01
+       11 | CREDIT    |  20000.0000 | 2026-11-13 09:04:12.926938+01
+       12 | DEBIT     |  10000.0000 | 2026-11-13 09:04:12.926938+01
+       15 | CREDIT    |  10000.0000 | 2026-11-13 09:04:12.926938+01
+(6 rows)
+
+--- BROKEN cursor: strict < on posted_at alone skips the tied rows ---
+ entry_id |           posted_at           
+----------+-------------------------------
+   269174 | 2026-11-01 00:58:04.954317+01
+   136009 | 2026-11-01 00:56:39.660435+01
+    13215 | 2026-11-01 00:55:57.2571+01
+   338927 | 2026-11-01 00:32:37.904762+01
+   104960 | 2026-11-01 00:01:26.572091+01
+(5 rows)
+
+--- CORRECT cursor: row-value comparison on (posted_at, entry_id) ---
+ entry_id |           posted_at           
+----------+-------------------------------
+       12 | 2026-11-13 09:04:12.926938+01
+       11 | 2026-11-13 09:04:12.926938+01
+        5 | 2026-11-13 09:04:12.926938+01
+        3 | 2026-11-13 09:04:12.926938+01
+        1 | 2026-11-13 09:04:12.926938+01
+(5 rows)
+
+
+The row-value comparison (posted_at, entry_id) < (:ts, :id) resumes exactly
+where the previous page ended, including partway through a tied group.
+PostgreSQL compares the tuple lexicographically and can still use a B-tree
+index on the same column order.
+
+--- performance of the CORRECTED cursor at depth 50,000 ---
+cursor: posted_at=2026-03-20 11:44:06.790623+01 entry_id=133917
+--- corrected keyset | run 1 ---
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=3.00..132.26 rows=50 width=24) (actual time=0.290..0.393 rows=50 loops=1)
+   Buffers: shared hit=64
+   ->  Incremental Sort  (cost=3.00..16321.82 rows=6312 width=24) (actual time=0.289..0.386 rows=50 loops=1)
+         Sort Key: posted_at DESC, entry_id DESC
+         Presorted Key: posted_at
+         Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB
+         Buffers: shared hit=64
+         ->  Index Scan using idx_le_account_posted on ledger_entries  (cost=0.42..16039.56 rows=6312 width=24) (actual time=0.039..0.338 rows=51 loops=1)
+               Index Cond: ((account_id = 2415) AND (posted_at <= '2026-03-20 11:44:06.790623+01'::timestamp with time zone))
+               Filter: (ROW(posted_at, entry_id) < ROW('2026-03-20 11:44:06.790623+01'::timestamp with time zone, 133917))
+               Rows Removed by Filter: 1
+               Buffers: shared hit=55
+ Planning:
+   Buffers: shared hit=171
+ Planning Time: 0.611 ms
+ Execution Time: 0.444 ms
+(16 rows)
+
+--- corrected keyset | run 2 ---
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=3.00..132.26 rows=50 width=24) (actual time=0.234..0.326 rows=50 loops=1)
+   Buffers: shared hit=64
+   ->  Incremental Sort  (cost=3.00..16321.82 rows=6312 width=24) (actual time=0.232..0.320 rows=50 loops=1)
+         Sort Key: posted_at DESC, entry_id DESC
+         Presorted Key: posted_at
+         Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB
+         Buffers: shared hit=64
+         ->  Index Scan using idx_le_account_posted on ledger_entries  (cost=0.42..16039.56 rows=6312 width=24) (actual time=0.029..0.282 rows=51 loops=1)
+               Index Cond: ((account_id = 2415) AND (posted_at <= '2026-03-20 11:44:06.790623+01'::timestamp with time zone))
+               Filter: (ROW(posted_at, entry_id) < ROW('2026-03-20 11:44:06.790623+01'::timestamp with time zone, 133917))
+               Rows Removed by Filter: 1
+               Buffers: shared hit=55
+ Planning:
+   Buffers: shared hit=171
+ Planning Time: 0.530 ms
+ Execution Time: 0.366 ms
+(16 rows)
+
+--- corrected keyset | run 3 ---
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=3.00..132.26 rows=50 width=24) (actual time=0.253..0.357 rows=50 loops=1)
+   Buffers: shared hit=64
+   ->  Incremental Sort  (cost=3.00..16321.82 rows=6312 width=24) (actual time=0.253..0.351 rows=50 loops=1)
+         Sort Key: posted_at DESC, entry_id DESC
+         Presorted Key: posted_at
+         Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB
+         Buffers: shared hit=64
+         ->  Index Scan using idx_le_account_posted on ledger_entries  (cost=0.42..16039.56 rows=6312 width=24) (actual time=0.037..0.302 rows=51 loops=1)
+               Index Cond: ((account_id = 2415) AND (posted_at <= '2026-03-20 11:44:06.790623+01'::timestamp with time zone))
+               Filter: (ROW(posted_at, entry_id) < ROW('2026-03-20 11:44:06.790623+01'::timestamp with time zone, 133917))
+               Rows Removed by Filter: 1
+               Buffers: shared hit=55
+ Planning:
+   Buffers: shared hit=171
+ Planning Time: 0.549 ms
+ Execution Time: 0.405 ms
+(16 rows)
+

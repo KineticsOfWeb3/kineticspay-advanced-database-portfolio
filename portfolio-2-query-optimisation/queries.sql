@@ -23,6 +23,19 @@
 --     Uses a window function over the ordered postings. The composite
 --     index (account_id, posted_at DESC) supplies both the filter and
 --     the ordering, so no Sort node is needed.
+--
+--     NOTE on paging this query: posted_at is NOT unique within an
+--     account - both sides of a transfer share settled_at. A keyset
+--     cursor must therefore be a row-value comparison including a
+--     unique tie-breaker:
+--
+--         WHERE account_id = :a
+--           AND (posted_at, entry_id) < (:last_posted_at, :last_entry_id)
+--         ORDER BY posted_at DESC, entry_id DESC
+--         LIMIT 50
+--
+--     A cursor on posted_at alone silently skips tied rows. See
+--     performance-analysis.md section 5.
 -- ---------------------------------------------------------------------
 \echo ''
 \echo 'Q1  Wallet statement with running balance'

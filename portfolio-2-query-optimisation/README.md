@@ -120,6 +120,21 @@ explicitly, and validation V8 confirms it.
 
 ---
 
+## A defect found in my own experiment
+
+Experiment 4's keyset cursor used `posted_at` alone. That is **wrong** when two
+postings share a timestamp — and in this schema they structurally do, because
+both sides of a transfer are written with the same `settled_at`. The dataset
+contains 4 colliding `(account_id, posted_at)` groups, the worst holding 6 rows.
+
+Demonstrated: on that account the broken cursor skipped all six tied rows and
+jumped to a row twelve days earlier. The fix is a row-value comparison with a
+unique tie-breaker, `(posted_at, entry_id) < (:ts, :id)`, measured at 0.41 ms
+median — still ~134× faster than `OFFSET`, and now correct.
+
+The original query was fast and wrong, which is the worse of the two failure
+modes.
+
 ## Two findings I did not expect
 
 **The planner never chose a sequential scan, even at 21.89% selectivity.** I
@@ -154,11 +169,16 @@ storing them would be measured, not assumed. Experiment 5:
 Refresh costs ~400 ms; storage overhead is 2.6% of the ledger.
 
 **The Portfolio 1 decision stands, with a qualification.** The two are not
-substitutes — they answer different questions. Authorising a debit must read
-the ledger, because spending against a stale balance is how a platform permits
-an overdraft it never agreed to. Displaying a balance in an app can read the
-materialised view, because a few seconds of staleness is invisible and costs
-344× less.
+substitutes — they answer different questions. Displaying a balance in an app
+can read the materialised view, because a few seconds of staleness is invisible
+and costs 344× less. Authorising a debit cannot.
+
+But reading the ledger is **necessary and not sufficient**, and an earlier draft
+of this README overstated it. Two concurrent withdrawals can each read a
+perfectly fresh ₦50,000 balance, each conclude ₦35,000 is affordable, and both
+commit — the balance was never stale, the *check* was unserialised. Freshness
+and concurrency control are independent problems and this activity only
+addressed the first. The second is Portfolio 3.
 
 ---
 

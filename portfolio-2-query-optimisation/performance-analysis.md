@@ -15,8 +15,9 @@ times warm**, and Experiment 1 additionally includes a **cold run taken
 immediately after a server restart**, so cache effects are visible rather than
 assumed.
 
-All figures below are medians of three runs, taken from
-[`execution-plans/`](execution-plans/). Buffer counts are quoted alongside
+All figures below are **medians of three runs**, taken from
+[`execution-plans/`](execution-plans/). The full spread is reported in §10 so
+that run-to-run variance is visible rather than hidden behind a single number. Buffer counts are quoted alongside
 timings because buffers are hardware-independent: on a shared container, *how
 many 8 KB pages the engine touched* is more trustworthy evidence than
 milliseconds.
@@ -147,7 +148,8 @@ composite index.
 | `LIMIT 50 OFFSET 500` | Index Scan | 2.26 ms |
 | `LIMIT 50 OFFSET 5000` | Index Scan | 7.70 ms |
 | `LIMIT 50 OFFSET 50000` | Bitmap Heap Scan → **Sort** | 54.4 ms |
-| **Keyset at the same depth** | **Index Scan** | **0.34 ms** |
+| Keyset, single-column cursor | Index Scan | 0.34 ms ⚠️ *incorrect — see below* |
+| **Keyset, `(posted_at, entry_id)` cursor** | **Index Scan** | **0.41 ms** |
 
 **Keyset pagination is ~160× faster at depth 50,000 — and flat.**
 
@@ -156,17 +158,46 @@ the offset, so cost grows linearly with page depth. At `OFFSET 50000` the
 planner even abandoned the index: once nearly all of the account's rows must be
 read anyway, a bitmap scan plus an explicit sort is cheaper than an index walk.
 
-Keyset pagination replaces `OFFSET` with a predicate on the last row seen:
+Keyset pagination replaces `OFFSET` with a predicate on the last row seen. The
+index seeks straight to that position, so cost is identical at page 1 and page
+1,000.
+
+### Correction: the single-column cursor was wrong
+
+The version first measured above used a cursor on `posted_at` alone:
 
 ```sql
-WHERE account_id = 2415 AND posted_at < :last_seen
+WHERE account_id = 2415 AND posted_at < :last_seen     -- BROKEN
 ORDER BY posted_at DESC LIMIT 50
 ```
 
-The index seeks straight to that position. Cost is identical at page 1 and page
-1,000. For a transaction history that grows without bound, this is the
-difference between a statement screen that stays usable and one that degrades
-as a customer transacts.
+That is incorrect whenever two postings share a timestamp — and in this schema
+they **structurally do**, because both sides of a transfer are written with the
+same `settled_at`. The dataset contains 4 `(account_id, posted_at)` groups with
+more than one row, the worst holding 6.
+
+With strict `<` the page boundary **skips every tied row**; with `<=` it
+**repeats them**. Demonstrated directly: on an account with six postings at one
+timestamp, the broken cursor jumped straight past all of them to a row dated
+twelve days earlier. A customer would simply never see those six entries in
+their statement.
+
+The fix is a **row-value comparison** including a unique tie-breaker:
+
+```sql
+WHERE account_id = 2415
+  AND (posted_at, entry_id) < (:last_posted_at, :last_entry_id)
+ORDER BY posted_at DESC, entry_id DESC
+LIMIT 50
+```
+
+PostgreSQL compares the tuple lexicographically and can still drive this from a
+B-tree index on the same column order. Measured at depth 50,000: **0.41 ms
+median** (0.37–0.44), against 54.4 ms for `OFFSET` — still ~134× faster, still
+flat with depth, and now correct.
+
+This was a real defect, not a presentational one. The original query was fast
+and wrong, which is the worse failure mode of the two.
 
 ---
 
@@ -214,13 +245,44 @@ qualifying rather than defending unconditionally:
   derived balance is authoritative; the materialised view is a cache that is
   measurably wrong between refreshes.
 
+### The consistency model, stated explicitly
+
+Four things are easy to conflate and are not the same:
+
+| layer | role | authority |
+|---|---|---|
+| `ledger_entries` | The accounting record. Append-only, double-entry | **Authoritative.** Nothing else is |
+| `account_balances` view | Balance *derived* from authoritative postings | Correct by construction; never stored |
+| `mv_account_balances` | A **read cache**. Correct only as at its last refresh | Not authoritative |
+| `transactions.status` | Processing state of a payment attempt | Authoritative for workflow, not for value |
+
 So the right architecture is not one or the other:
 
 | use | source | why |
 |---|---|---|
-| Authorising a debit | derived from the ledger | Must be correct. Spending money on a stale balance is how a platform permits an overdraft it never agreed to |
+| Authorising a debit | derived from the ledger, **under a lock** | See the correction below |
 | Displaying a balance in the app | materialised view | A few seconds of staleness is invisible to a user and costs 344× less |
 | Reconciliation and reporting | derived from the ledger | Must be reproducible from first principles |
+
+### Correction: reading the ledger is necessary but not sufficient
+
+An earlier draft of this section said that authorising a debit "must read the
+ledger, because spending against a stale balance is how a platform permits an
+overdraft it never agreed to". The first half is right; the conclusion drawn
+from it was too strong.
+
+Reading the authoritative ledger does **not** by itself prevent an overdraft.
+Two concurrent withdrawals can each compute a correct, fully up-to-date balance
+of ₦50,000, each conclude that ₦35,000 is affordable, and both commit — because
+neither saw the other's postings, which did not exist at read time. The balance
+was never stale. The *check* was unserialised.
+
+Freshness and concurrency control are independent problems, and this experiment
+only addressed the first. Preventing the overdraft requires row-level locking
+or a sufficiently strict isolation level around the read-and-post sequence.
+That is **Portfolio 3**, and it is the reason the schema still carries no
+overdraft constraint: the race has to be reproducible before the fix means
+anything.
 
 The refresh cost (~400 ms) bounds how fresh the cache can be: refreshing every
 second would consume ~40% of a core continuously. A 30-second refresh cycle
@@ -248,9 +310,31 @@ the figures isolate index maintenance rather than trigger cost.
 
 **5.9× slower to write, and the indexes occupy 90% of the heap size.**
 
-On the real ledger the position is worse: 42 MB heap against **51 MB of
-indexes — 123.7% of the table itself**. Every index is paid for on every
-insert, forever.
+On the real ledger the position is worse. Two different ratios appear in this
+report and they measure different things, so both are reconciled here:
+
+| measurement | heap | indexes | ratio | what is counted |
+|---|---|---|---|---|
+| Benchmark copy table | 7,984 kB | 7,184 kB | **90%** | **three secondary indexes only** — the bench table has no primary key and no constraints |
+| Real `ledger_entries` | 42 MB | 55 MB | **132%** | **every index**, including constraint-backing ones |
+
+The gap is entirely constraint-backing indexes, which are not optional:
+
+| index | size | kind |
+|---|---|---|
+| `ledger_entries_tx_account_direction_uq` | 20 MB | constraint-backing (UNIQUE, Portfolio 1) |
+| `ledger_entries_pkey` | 11 MB | constraint-backing (PRIMARY KEY) |
+| `idx_le_account_posted` | 16 MB | secondary |
+| `idx_le_account` | 3,736 kB | secondary (redundant — see `indexes.sql`) |
+| `idx_le_direction` | 3,600 kB | secondary (harmful — Experiment 7) |
+
+Constraint indexes account for **31 MB of the 55 MB**. Secondary indexes alone
+are 23 MB, or 55% of the heap. An earlier draft of this document quoted 123.7%,
+measured before `indexes.sql` added the `transactions` indexes; the figure moves
+as the index set changes, which is precisely why it must be stated with the
+index set it was measured against.
+
+Every index is paid for on every insert, forever.
 
 Index usage after the benchmark run:
 
@@ -291,6 +375,13 @@ work in a way that a collection of successes does not.
 |---|---|---|
 | Before index | Parallel Seq Scan | 48.3 ms |
 | After index on `direction` | **Parallel Seq Scan** | 58.4 ms |
+
+**The plan is the evidence here, not the counter.** Under default planner
+settings PostgreSQL chose `Parallel Seq Scan` both before and after the index
+existed — the two plans are structurally identical, which is a direct
+observation from `EXPLAIN (ANALYZE, BUFFERS)` and does not depend on
+interpreting any statistic. `idx_scan` is corroboration, and as the correction
+below shows, it is corroboration that needs care.
 
 **The planner ignored the index entirely** — `idx_scan = 0` in
 `pg_stat_user_indexes` at the point of measurement. It cost 3,600 kB of
@@ -373,3 +464,43 @@ with freshness. The only finding with no trade-off attached is keyset
 pagination, which is faster *and* cheaper — and that is because it is not an
 optimisation at all, but a correction to a query pattern that was wrong to
 begin with.
+
+---
+
+## 10. Run-to-run variance
+
+Every measured figure is the median of three warm runs. The full spread is
+given here so that the stability of each comparison can be judged rather than
+taken on trust.
+
+| experiment | measurement | min | **median** | max | spread |
+|---|---|---|---|---|---|
+| 1 | Baseline seq scan | 23.22 | **25.47** | 27.65 | ±8% |
+| 1 | With index | 1.19 | **1.55** | 1.65 | ±16% |
+| 2 | Single-column + Sort | 1.19 | **1.44** | 1.52 | ±14% |
+| 2 | Composite index | 0.22 | **0.28** | 0.33 | ±22% |
+| 4 | `OFFSET 50000` | 49.71 | **54.39** | 60.95 | ±11% |
+| 4 | Keyset (corrected) | 0.37 | **0.41** | 0.44 | ±10% |
+| 5 | Derived, all accounts | 325.86 | **364.83** | 436.60 | ±15% |
+| 5 | Materialised view, all | 1.00 | **1.05** | 1.56 | ±28% |
+| 7 | Before direction index | 47.93 | **48.30** | 50.42 | ±3% |
+| 7 | After direction index | 57.50 | **58.38** | 61.90 | ±8% |
+
+All times in milliseconds.
+
+**How to read this.** Variance is 3–28%, which is normal on a shared container
+and is why no conclusion in this report rests on a difference smaller than the
+spread. The comparisons that carry the findings are all far larger than the
+noise: 16×, 5.1×, 134×, 344×.
+
+The one place where variance *does* matter is Experiment 7, where the measured
+difference before and after adding the index (48.3 → 58.4 ms, roughly 20%) is
+only a little outside the observed spread. That is exactly why the conclusion
+there rests on the **plan being structurally identical**, not on the timing.
+Reading a 20% difference as evidence that an index slowed down reads would be
+mistaking noise for signal.
+
+Conditions held constant across all runs: same PostgreSQL instance and
+configuration ([`evidence/environment.txt`](evidence/environment.txt)), same
+528,647-row dataset from a fixed seed, same query parameters, no concurrent
+workload, `VACUUM ANALYZE` completed before measurement.
