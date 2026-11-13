@@ -1,0 +1,372 @@
+
+==============================================================
+PORTFOLIO 3 - TRANSACTIONS AND CONCURRENCY
+==============================================================
+Scenario, identical in every phase:
+
+    Wallet WAL-TEST-A-NGN starts with NGN 50000.
+    Session A withdraws NGN 35000.
+    Session B withdraws NGN 35000, concurrently.
+
+    Total attempted: NGN 70,000.  Available: NGN 50000.
+
+Exactly one withdrawal should succeed. Each phase applies a different
+control and reports what actually happened.
+
+Run at: 2026-11-13 08:24:56 UTC
+PostgreSQL: 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+
+==============================================================
+PHASE 0 - A single transaction in isolation: COMMIT and ROLLBACK
+==============================================================
+Before any concurrency, the baseline transactional behaviour. A withdrawal
+is posted and then rolled back; the ledger must show no trace of it.
+--- balance before ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |           1
+(1 row)
+
+--- BEGIN, post 35,000, then ROLLBACK ---
+BEGIN
+ posted_reference 
+------------------
+ KP-2026-866117
+(1 row)
+
+ balance_inside_transaction 
+----------------------------
+                 15000.0000
+(1 row)
+
+ROLLBACK
+--- balance after ROLLBACK (must be unchanged) ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |           1
+(1 row)
+
+
+--- BEGIN, post 35,000, SAVEPOINT, post again, roll back to savepoint, COMMIT ---
+BEGIN
+ first_posting  
+----------------
+ KP-2026-875433
+(1 row)
+
+SAVEPOINT
+ second_posting 
+----------------
+ KP-2026-861626
+(1 row)
+
+ROLLBACK
+COMMIT
+--- balance after partial rollback (expect 40,000: only the first posting kept) ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 40000.0000 |           2
+(1 row)
+
+
+==============================================================
+PHASE 1 - THE RACE, with no protection at all
+==============================================================
+Each session does what an unprotected application does:
+
+    1. read the authoritative balance from the ledger
+    2. decide whether the withdrawal is affordable
+    3. post it
+
+Both sessions read BEFORE either commits. Both see 50,000. Both conclude
+35,000 is affordable. The balance is never stale - the CHECK is
+unserialised.
+--- balance before ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |           3
+(1 row)
+
+
+----- SESSION A output -----
+  A| NOTICE:  read balance = 50000.0000
+  A| NOTICE:  DECISION: sufficient funds -> POSTED 35000 
+  A| DO
+----- SESSION B output -----
+  B| NOTICE:  read balance = 50000.0000
+  B| NOTICE:  DECISION: sufficient funds -> POSTED 35000 
+  B| DO
+
+--- balance after (expect -20,000 if the race occurred) ---
+ wallet_reference |   balance   | entry_count 
+------------------+-------------+-------------
+ WAL-TEST-A-NGN   | -20000.0000 |           5
+(1 row)
+
+--- the ledger still balances, which is the point: double-entry does NOT prevent an overdraft ---
+ global_imbalance 
+------------------
+           0.0000
+(1 row)
+
+
+==============================================================
+PHASE 2 - Does a deferred overdraft CONSTRAINT alone fix it?
+==============================================================
+A natural first instinct: add a constraint forbidding a negative wallet
+balance, and let the database enforce it. Since the balance is derived,
+this must be a DEFERRABLE constraint trigger evaluated at COMMIT.
+
+The question this phase answers empirically: is a correctness constraint
+sufficient on its own, without any locking?
+NOTICE:  trigger "trg_ledger_entries_no_overdraft" for relation "ledger_entries" does not exist, skipping
+constraint trigger installed.
+--- balance before ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |           6
+(1 row)
+
+
+----- SESSION A output -----
+  A| NOTICE:  read balance = 50000.0000
+  A| NOTICE:  DECISION: sufficient funds -> POSTED 35000 
+  A| DO
+----- SESSION B output -----
+  B| NOTICE:  read balance = 50000.0000
+  B| NOTICE:  DECISION: sufficient funds -> POSTED 35000 
+  B| ERROR:  Overdraft refused on WAL-TEST-A-NGN: balance would be -20000.0000
+  B| CONTEXT:  PL/pgSQL function fn_assert_no_overdraft() line 18 at RAISE
+
+--- balance after ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 15000.0000 |           7
+(1 row)
+
+
+--- 2B: the same two sessions committing at the SAME instant (no stagger) ---
+Phase 2A staggered the sessions by 0.4s, so one committed before the
+other's deferred check ran. Removing the stagger makes both commit
+together. If the constraint is doing the work alone, the outcome should
+not depend on timing.
+
+----- SESSION A output -----
+  A| NOTICE:  read balance = 50000.0000
+  A| NOTICE:  DECISION: sufficient funds -> POSTED 35000 
+  A| DO
+----- SESSION B output -----
+  B| NOTICE:  read balance = 50000.0000
+  B| NOTICE:  DECISION: sufficient funds -> POSTED 35000 
+  B| DO
+
+--- balance after simultaneous commit ---
+ wallet_reference |   balance   | entry_count 
+------------------+-------------+-------------
+ WAL-TEST-A-NGN   | -20000.0000 |          10
+(1 row)
+
+
+==============================================================
+PHASE 3 - SELECT ... FOR UPDATE (pessimistic row lock)
+==============================================================
+The accounts row is used as a LOCK ANCHOR. It is not where the balance
+lives - the balance is derived from ledger_entries - but every writer
+agrees to take the same row lock before reading and posting. That
+serialises them.
+
+Session B will BLOCK at the lock until A commits, then read a balance
+that already includes A's withdrawal.
+--- balance before ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |          11
+(1 row)
+
+
+----- SESSION A output -----
+  A| NOTICE:  acquired row lock on account 5511
+  A| NOTICE:  read balance = 50000.0000
+  A| NOTICE:  DECISION: sufficient funds -> POSTED 35000
+  A| DO
+----- SESSION B output -----
+  B| NOTICE:  acquired row lock on account 5511
+  B| NOTICE:  read balance = 15000.0000
+  B| NOTICE:  DECISION: insufficient funds -> REJECTED
+  B| DO
+
+--- balance after (expect 15,000: exactly one withdrawal) ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 15000.0000 |          12
+(1 row)
+
+
+==============================================================
+PHASE 4 - SERIALIZABLE isolation (optimistic)
+==============================================================
+No explicit locks. Both sessions run at SERIALIZABLE and read the ledger.
+PostgreSQL's Serializable Snapshot Isolation tracks the read-write
+dependency between them and aborts one with SQLSTATE 40001 when the
+interleaving could not have arisen from any serial order.
+
+The application's obligation under SERIALIZABLE is to RETRY on 40001 -
+a serialization failure is an expected outcome, not a bug.
+--- balance before ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |          13
+(1 row)
+
+
+----- SESSION A output -----
+  A| NOTICE:  read balance = 50000.0000
+  A| NOTICE:  DECISION: sufficient funds -> POSTED 35000
+  A| BEGIN
+  A| DO
+  A| COMMIT
+----- SESSION B output -----
+  B| NOTICE:  read balance = 50000.0000
+  B| BEGIN
+  B| ERROR:  could not serialize access due to read/write dependencies among transactions
+  B| DETAIL:  Reason code: Canceled on identification as a pivot, during write.
+  B| HINT:  The transaction might succeed if retried.
+  B| CONTEXT:  SQL statement "INSERT INTO transactions (transaction_reference, transaction_type, status,
+  B|                               channel, currency_code, narration,
+  B|                               initiated_at, settled_at)
+  B|     VALUES (v_ref, 'WITHDRAWAL', 'COMPLETED', 'API', 'NGN',
+  B|             p_narration, now(), now())
+  B|     RETURNING transaction_id"
+  B| PL/pgSQL function fn_post_withdrawal(character varying,numeric,character varying) line 12 at SQL statement
+  B| SQL statement "SELECT fn_post_withdrawal('WAL-TEST-A-NGN', 35000, 'serializable')"
+  B| PL/pgSQL function inline_code_block line 9 at PERFORM
+
+--- balance after (expect 15,000, with one session receiving SQLSTATE 40001) ---
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 15000.0000 |          14
+(1 row)
+
+
+==============================================================
+PHASE 5 - Read phenomena across isolation levels
+==============================================================
+PostgreSQL never permits dirty reads at any isolation level, so the
+classic four-phenomena table does not map onto it directly. What CAN be
+demonstrated is the difference between READ COMMITTED and REPEATABLE
+READ for a non-repeatable read.
+
+--- 5A: READ COMMITTED - the same query returns different answers ---
+  WRITER| committed a 5,000 withdrawal while the reader was open
+  READER| BEGIN
+  READER|  first_read 
+  READER| ------------
+  READER|  50000.0000
+  READER| (1 row)
+  READER| 
+  READER|  pg_sleep 
+  READER| ----------
+  READER|  
+  READER| (1 row)
+  READER| 
+  READER|  second_read 
+  READER| -------------
+  READER|   45000.0000
+  READER| (1 row)
+  READER| 
+  READER| COMMIT
+
+--- 5B: REPEATABLE READ - the snapshot is stable ---
+  WRITER| committed a 5,000 withdrawal while the reader was open
+  READER| BEGIN
+  READER|  first_read 
+  READER| ------------
+  READER|  50000.0000
+  READER| (1 row)
+  READER| 
+  READER|  pg_sleep 
+  READER| ----------
+  READER|  
+  READER| (1 row)
+  READER| 
+  READER|  second_read 
+  READER| -------------
+  READER|   50000.0000
+  READER| (1 row)
+  READER| 
+  READER| COMMIT
+  (the reader's two reads agree; the write is simply not in its snapshot)
+
+--- 5C: phantom rows under READ COMMITTED ---
+  WRITER| inserted new ledger rows matching the reader's predicate
+  READER| BEGIN
+  READER|  first_count 
+  READER| -------------
+  READER|           18
+  READER| (1 row)
+  READER| 
+  READER|  pg_sleep 
+  READER| ----------
+  READER|  
+  READER| (1 row)
+  READER| 
+  READER|  second_count 
+  READER| --------------
+  READER|            19
+  READER| (1 row)
+  READER| 
+  READER| COMMIT
+
+==============================================================
+PHASE 6 - Deadlock between two opposing transfers
+==============================================================
+A transfers to B while B transfers to A. Each locks its own wallet first,
+then reaches for the other's. Neither can proceed.
+
+PostgreSQL detects the cycle and aborts one transaction with SQLSTATE
+40P01. The fix is not a longer timeout: it is a consistent LOCK ORDERING,
+shown afterwards.
+
+----- SESSION A output -----
+  A| NOTICE:  locked A
+  A| NOTICE:  reaching for B...
+  A| ERROR:  deadlock detected
+  A| DETAIL:  Process 391 waits for ShareLock on transaction 1048; blocked by process 393.
+  A| Process 393 waits for ShareLock on transaction 1047; blocked by process 391.
+  A| HINT:  See server log for query details.
+  A| CONTEXT:  while locking tuple (68,3) in relation "accounts"
+  A| SQL statement "SELECT 1 FROM accounts WHERE account_reference='WAL-TEST-B-NGN' FOR UPDATE"
+  A| PL/pgSQL function inline_code_block line 7 at PERFORM
+----- SESSION B output -----
+  B| NOTICE:  locked B
+  B| NOTICE:  reaching for A...
+  B| NOTICE:  locked A
+  B| DO
+
+--- 6B: the same two transfers, with locks taken in a CONSISTENT ORDER ---
+Both sessions now lock accounts in ascending account_id order, regardless
+of which direction the money is moving. A cycle becomes impossible: one
+session simply waits for the other.
+
+----- SESSION A output -----
+  A| NOTICE:  locked account 5511 (ascending order)
+  A| NOTICE:  locked account 5512 (ascending order)
+  A| NOTICE:  both locks held, work done, committing
+  A| DO
+----- SESSION B output -----
+  B| NOTICE:  locked account 5511 (ascending order)
+  B| NOTICE:  locked account 5512 (ascending order)
+  B| NOTICE:  both locks held, work done, committing
+  B| DO
+
+==============================================================
+CLEANUP - remove the experimental overdraft trigger
+==============================================================
+The overdraft constraint is re-applied permanently by safe-transfer.sql,
+together with the locking it requires. Dropping the standalone version:
+DROP TRIGGER
+ wallet_reference |  balance   | entry_count 
+------------------+------------+-------------
+ WAL-TEST-A-NGN   | 50000.0000 |          20
+(1 row)
+
