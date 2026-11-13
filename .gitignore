@@ -23,3 +23,6 @@ venv/
 
 # Node (mermaid-cli)
 node_modules/
+
+# Portfolio 2 generated dataset (reproducible from generate_data.py, seed 8103)
+portfolio-2-query-optimisation/data/

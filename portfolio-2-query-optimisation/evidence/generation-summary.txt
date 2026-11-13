@@ -1,0 +1,13 @@
+seed                 : 8103
+customers            : 5,000
+accounts             : 5,498 (5,000 NGN, 498 USD)
+transactions         : 250,000
+ledger entries       : 528,630
+date span            : 2026-02-04 .. 2026-11-01
+
+Postings per wallet (skew check)
+  busiest wallet     : 56,297
+  median wallet      : 8
+  quietest wallet    : 1
+  top 1% of wallets  : 63.7% of all postings
+  wallets with 0     : 39
