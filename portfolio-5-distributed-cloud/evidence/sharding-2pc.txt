@@ -1,0 +1,233 @@
+
+==============================================================
+EXPERIMENT 7 - Horizontal fragmentation by region (NDPA 2023)
+==============================================================
+WHY FRAGMENT AT ALL
+
+The Nigeria Data Protection Act 2023 restricts transfers of personal
+data outside Nigeria unless the destination provides adequate
+protection. A payment platform operating across West Africa therefore
+cannot simply replicate every customer's records to whichever region has
+spare capacity.
+
+Horizontal fragmentation is the structural answer: split by ROWS, on a
+region key, so that Nigerian data subjects' postings physically reside
+in Nigerian infrastructure. This is the same horizontal fragmentation
+Study Session 02 describes, and the reason GlobalBank in the Atomic Poll
+chose it.
+
+Vertical fragmentation (splitting COLUMNS) would not help here: every
+fragment would still contain rows belonging to every data subject.
+NOTICE:  table "ledger_entries_sharded" does not exist, skipping
+--- loading the real ledger into regional fragments ---
+    region derived from account_id so the split is deterministic
+
+real	0m1.629s
+user	0m0.033s
+sys	0m0.008s
+    fragment     |  rows  |  size   
+-----------------+--------+---------
+ ledger_gh_accra |  28442 | 3760 kB
+ ledger_ng_abuja | 188462 | 24 MB
+ ledger_ng_lagos | 311859 | 40 MB
+ ledger_other    |      0 | 16 kB
+(4 rows)
+
+  region  | postings | pct  |   total_value   
+----------+----------+------+-----------------
+ NG_LAGOS |   311859 | 59.0 | 9060210576.6100
+ NG_ABUJA |   188462 | 35.6 | 3647419667.3700
+ GH_ACCRA |    28442 |  5.4 |   10113805.1600
+(3 rows)
+
+
+==============================================================
+EXPERIMENT 8 - Partition pruning: does the planner use the fragments?
+==============================================================
+Fragmentation only pays off if the planner can EXCLUDE fragments it does
+not need. A query scoped to one region should touch one partition.
+--- 8A: query scoped to one region (expect ONE partition scanned) ---
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate (actual time=57.108..59.910 rows=1 loops=1)
+   Buffers: shared hit=3544
+   ->  Gather (actual time=56.939..59.870 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=3544
+         ->  Partial Aggregate (actual time=53.385..53.386 rows=1 loops=3)
+               Buffers: shared hit=3544
+               ->  Parallel Seq Scan on ledger_ng_lagos ledger_entries_sharded (actual time=0.010..30.503 rows=103953 loops=3)
+                     Filter: (region = 'NG_LAGOS'::text)
+
+--- 8B: query with NO region predicate (expect ALL partitions scanned) ---
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate (actual time=113.036..114.654 rows=1 loops=1)
+   Buffers: shared hit=6010
+   ->  Gather (actual time=113.022..114.641 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=6010
+         ->  Partial Aggregate (actual time=107.556..107.558 rows=1 loops=3)
+               Buffers: shared hit=6010
+               ->  Parallel Append (actual time=0.009..64.159 rows=176254 loops=3)
+                     Buffers: shared hit=6010
+                     ->  Parallel Seq Scan on ledger_ng_lagos ledger_entries_sharded_3 (actual time=0.010..23.150 rows=103953 loops=3)
+                           Buffers: shared hit=3544
+
+--- 8C: a cross-region aggregate - the real cost of fragmenting ---
+    a compliance report spanning jurisdictions must touch every fragment
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate (actual time=98.835..99.252 rows=3 loops=1)
+   Group Key: ledger_entries_sharded.region
+   ->  Gather Merge (actual time=98.828..99.245 rows=6 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         ->  Sort (actual time=92.704..92.707 rows=2 loops=3)
+               Sort Key: ledger_entries_sharded.region
+               Sort Method: quicksort  Memory: 25kB
+
+==============================================================
+EXPERIMENT 9 - Cross-node sharding with postgres_fdw
+==============================================================
+Partitions above live on ONE node. Real sharding puts them on separate
+nodes. postgres_fdw makes a remote table queryable as if it were local,
+which is the mechanism behind a federated or sharded PostgreSQL
+deployment.
+
+Node B (port 5433) is the node promoted in Experiment 5, now an
+independent primary. It plays the Abuja shard.
+NOTICE:  server "shard_abuja" does not exist, skipping
+--- creating a local table on node B to stand in as the remote shard ---
+NOTICE:  table "ledger_abuja_remote" does not exist, skipping
+--- moving the Abuja fragment to node B ---
+ rows_on_node_b 
+----------------
+         188462
+(1 row)
+
+--- exposing it on node A as a foreign table ---
+NOTICE:  foreign table "ledger_abuja" does not exist, skipping
+ rows_visible_from_node_a 
+--------------------------
+                   188462
+(1 row)
+
+
+--- 9A: aggregate pushed DOWN to the remote node ---
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Foreign Scan (actual time=29.328..29.330 rows=1 loops=1)
+   Output: (count(*)), (sum(amount))
+   Relations: Aggregate on (public.ledger_abuja)
+   Remote SQL: SELECT count(*), sum(amount) FROM public.ledger_abuja_remote
+ Planning Time: 1.553 ms
+ Execution Time: 32.693 ms
+(6 rows)
+
+
+--- 9B: a JOIN across the shard boundary ---
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ HashAggregate (actual time=293.340..293.344 rows=2 loops=1)
+   Group Key: a.account_type
+   Batches: 1  Memory Usage: 24kB
+   ->  Hash Join (actual time=2.502..262.568 rows=188462 loops=1)
+         Hash Cond: (r.account_id = a.account_id)
+         ->  Foreign Scan on ledger_abuja r (actual time=0.521..213.445 rows=188462 loops=1)
+         ->  Hash (actual time=1.937..1.938 rows=5512 loops=1)
+               Buckets: 8192  Batches: 1  Memory Usage: 323kB
+               ->  Seq Scan on accounts a (actual time=0.113..1.201 rows=5512 loops=1)
+ Planning Time: 2.087 ms
+ Execution Time: 296.207 ms
+(11 rows)
+
+--- 9C: local fragment versus remote shard, same query ---
+  LOCAL partition:
+Execution Time: 33.728 ms
+Execution Time: 34.958 ms
+Execution Time: 26.826 ms
+  REMOTE shard over FDW:
+Execution Time: 14.002 ms
+Execution Time: 20.492 ms
+Execution Time: 19.665 ms
+
+==============================================================
+EXPERIMENT 10 - Two-phase commit across two nodes
+==============================================================
+A transfer whose sender is in Lagos and recipient in Abuja must be
+atomic across BOTH nodes. The classic mechanism is two-phase commit:
+PREPARE on every participant, then COMMIT PREPARED on every participant.
+
+PostgreSQL exposes the participant half directly.
+ max_prepared_transactions 
+---------------------------
+ 20
+(1 row)
+
+ max_prepared_transactions 
+---------------------------
+ 20
+(1 row)
+
+
+--- 10A: a successful distributed transaction ---
+  both nodes have PREPARED but not committed:
+      gid       |           prepared            |  database   
+----------------+-------------------------------+-------------
+ xfer_lagos_001 | 2026-11-13 19:31:15.255477+01 | kineticspay
+(1 row)
+
+      gid       |           prepared           |  database   
+----------------+------------------------------+-------------
+ xfer_abuja_001 | 2026-11-13 19:31:15.28765+01 | kineticspay
+(1 row)
+
+  is the row visible yet on node A? (expect 0 - prepared is not committed)
+0
+  phase 2: commit on both
+  node A now sees: 1
+  node B now sees: 1
+
+--- 10B: THE BLOCKING PROBLEM - coordinator dies after PREPARE ---
+    Node A prepares. The coordinator then crashes before telling anyone
+    whether to commit or abort. The prepared transaction survives, holds
+    its locks, and holds back the transaction horizon - indefinitely.
+  coordinator is now assumed dead. State left behind:
+       gid       |           prepared            |  owner   
+-----------------+-------------------------------+----------
+ orphan_xfer_002 | 2026-11-13 19:31:15.607619+01 | postgres
+(1 row)
+
+  locks still held by the orphan:
+   locktype    |          rel           |       mode       
+---------------+------------------------+------------------
+ relation      | ledger_entries_sharded | RowExclusiveLock
+ relation      | ledger_ng_lagos        | RowExclusiveLock
+ transactionid |                        | ExclusiveLock
+(3 rows)
+
+  effect on VACUUM: the orphan pins the transaction horizon
+ prepared_xacts_blocking_vacuum | oldest_xid_age 
+--------------------------------+----------------
+                              1 |              1
+(1 row)
+
+
+  a new session touching the same row now WAITS on the orphan:
+SET
+DELETE 0
+
+  only a human (or an external transaction manager) can resolve it:
+ remaining_prepared 
+--------------------
+                  0
+(1 row)
+
+
+==============================================================
+CLEANUP
+==============================================================
+done

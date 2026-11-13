@@ -1,0 +1,51 @@
+==============================================================
+10C - CORRECTION: demonstrating the orphan's blocking properly
+==============================================================
+Experiment 10B's blocking test was wrong. It ran:
+
+    DELETE FROM ledger_entries_sharded WHERE entry_id = 999000003;
+
+and reported "DELETE 0". That is not the orphan blocking the session -
+it is the opposite. The prepared row is NOT YET COMMITTED, so a new
+session cannot see it, finds no row to delete, and never touches the
+orphan's locks at all. The test proved nothing.
+
+Two operations DO conflict. Both are run below.
+
+orphan re-created:
+       gid       |           prepared            
+-----------------+-------------------------------
+ orphan_xfer_003 | 2026-11-13 19:31:53.530915+01
+(1 row)
+
+
+--- 10C-i: a conflicting INSERT on the same primary key ---
+    the new session must wait to learn whether the orphan commits
+SET
+ERROR:  canceling statement due to lock timeout
+CONTEXT:  while inserting index tuple (3543,79) in relation "ledger_ng_lagos_pkey"
+    elapsed: 5.035713096 s
+
+--- 10C-ii: DDL needing AccessExclusiveLock on the partition ---
+SET
+ERROR:  canceling statement due to lock timeout
+    elapsed: 5.047487278 s
+
+--- what the orphan is holding ---
+   locktype    |          rel           |       mode       | granted | pid 
+---------------+------------------------+------------------+---------+-----
+ relation      | ledger_entries_sharded | RowExclusiveLock | t       |    
+ relation      | ledger_ng_lagos        | RowExclusiveLock | t       |    
+ transactionid |                        | ExclusiveLock    | t       |    
+(3 rows)
+
+
+--- resolving it ---
+after ROLLBACK PREPARED, the same INSERT succeeds immediately:
+INSERT 0 1
+    elapsed: .039622299 s
+ prepared_remaining 
+--------------------
+                  0
+(1 row)
+
