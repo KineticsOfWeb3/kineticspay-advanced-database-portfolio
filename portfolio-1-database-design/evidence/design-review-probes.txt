@@ -88,9 +88,12 @@ decimal places and stored:
      100.0002
     (2 rows)
 
-SEVERITY: Medium. The balance is now un-settleable: no payment rail can move
-0.0002 of a naira. The four decimal places were intended for intermediate
-percentage-fee arithmetic, not for stored postings.
+SEVERITY: Medium. The stored posting now carries more precision than NGN
+defines. The precise consequence depends on the downstream payment rail, but
+the defect is structural: NUMERIC(20,4) is the COLUMN's precision, while
+minor_unit = 2 is the CURRENCY's precision, and nothing connected the two. The
+four decimal places were intended for intermediate percentage-fee arithmetic,
+not for stored postings.
 
 ================================================================================
 PROBE D - Must a REVERSAL mirror the transaction it reverses?

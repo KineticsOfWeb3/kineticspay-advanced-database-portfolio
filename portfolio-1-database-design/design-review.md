@@ -96,8 +96,11 @@ portfolio. Claiming otherwise would be false.
 
 `amount` is `NUMERIC(20,4)` while NGN declares `minor_unit = 2`. Nothing
 connected the two, so a posting of `100.00019` was silently rounded to
-`100.0002` and stored. The resulting balance cannot be settled: no payment rail
-moves two ten-thousandths of a naira.
+`100.0002` and stored. The stored value then carries more precision than the
+currency defines. Whether such a balance is strictly unsettleable depends on
+the payment rail, but the schema should not be the thing deciding: the point is
+that **column precision and currency precision are different constraints**, and
+only the first was being enforced.
 
 The four decimal places exist for intermediate percentage-fee arithmetic, not
 for stored postings — but the schema never said so, and therefore never
@@ -148,6 +151,8 @@ acted on in Portfolio 1:
 | Transfers need sufficient-balance checks and row locking | Correct, and that is **Portfolio 3**. The schema deliberately has no overdraft check yet, so the lost-update and double-spend race is reproducible before the fix. Adding it here would remove the demonstration |
 | The balance view must handle debit-normal and credit-normal accounts | Already handled via `accounts.normal_balance`, and already proven: Test 2's trial balance nets to zero across asset and liability accounts, which it could not do if the signs were wrong |
 | The derived-balance query will not scale | True, and it is measured rather than assumed. Portfolio 2 profiles it at volume against materialised alternatives and lets the execution plans decide |
+| A transaction could be reversed more than once | Already prevented by `transactions_single_reversal_uq`, now demonstrated explicitly by Test 20. Partial reversals are **not supported** by this schema, and that is a stated design limit rather than an oversight |
+| Zero-value postings should be rejected | Already prevented by `amount > 0`, now demonstrated explicitly by Test 21. The constraint is deliberately `> 0` and not `>= 0`: a zero posting satisfies the balance check while carrying no accounting meaning |
 
 ---
 
@@ -172,7 +177,10 @@ acted on in Portfolio 1:
 | **18** | **Correctly mirrored reversal accepted** | ✅ pass |
 | **19** | **`kineticspay_app` holds no UPDATE/DELETE on the ledger** | ✅ verified |
 
-Nineteen tests, fourteen of them negative. Captured output:
+| **20** | **Second reversal of the same original rejected** | ✅ rejected |
+| **21** | **Zero-value posting rejected** | ✅ rejected |
+
+Twenty-one tests, sixteen of them negative. Captured output:
 [`evidence/verify-output.txt`](evidence/verify-output.txt).
 
 ---

@@ -19,6 +19,7 @@
 | Normalisation explanation | [`normalisation.md`](normalisation.md) |
 | Execution evidence | [`evidence/verify-output.txt`](evidence/verify-output.txt) |
 | Adversarial design review | [`design-review.md`](design-review.md) |
+| Personal verification checklist | [`verification-checklist.md`](verification-checklist.md) |
 
 ---
 
@@ -65,12 +66,13 @@ and recreates every object, so it can be re-run during development.
 
 ## How it was tested
 
-`verify.sql` contains nineteen tests. Five are positive and **fourteen are
+`verify.sql` contains twenty-one tests. Five are positive and **sixteen are
 negative** — each negative test attempts an operation that must fail, and the
 captured output shows the database rejecting it.
 
 Tests 13–19 were added after an adversarial design review that found four real
-holes in the first version of the schema. See [`design-review.md`](design-review.md).
+holes in the first version of the schema. Tests 20–21 confirm two further
+attacks were already blocked by existing constraints. See [`design-review.md`](design-review.md).
 
 The negative tests matter more than the positive ones. They demonstrate that
 the integrity rules are enforced by the **engine**, not by application code
@@ -99,6 +101,8 @@ that a future developer could bypass.
 | **17** | Reversal that does not mirror its original | ✅ rejected — *"4 unmatched posting(s)"* |
 | **18** | Correctly mirrored reversal | ✅ accepted |
 | **19** | `kineticspay_app` holds SELECT/INSERT but not UPDATE/DELETE on the ledger | ✅ verified |
+| **20** | Same transaction reversed twice | ✅ rejected — `transactions_single_reversal_uq` |
+| **21** | Zero-value posting | ✅ rejected — `amount > 0`, not `>= 0` |
 
 ### A note on Test 4 and Test 5
 
@@ -160,10 +164,11 @@ portfolio-1-database-design/
 ├── case-study.md           organisation, users, data, operations
 ├── schema.sql              DDL: types, tables, constraints, triggers, views
 ├── seed.sql                representative data (6 customers, 10 transactions)
-├── verify.sql              19-test integrity suite
+├── verify.sql              21-test integrity suite
 ├── normalisation.md        UNF → 1NF → 2NF → 3NF → BCNF, plus denormalisation
 ├── relationships.md        keys, foreign keys, constraint inventory
 ├── design-review.md        four gaps found by adversarial probing, and their fixes
+├── verification-checklist.md   what I must personally verify before submission
 ├── diagrams/
 │   ├── er-diagram.mmd      Mermaid source
 │   └── er-diagram.png      rendered diagram

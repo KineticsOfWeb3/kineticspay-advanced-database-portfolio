@@ -248,3 +248,40 @@ ROLLBACK;
 SELECT privilege_type,
        has_table_privilege('kineticspay_app', 'ledger_entries', privilege_type) AS granted
 FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS p(privilege_type);
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 20 NEGATIVE - the same transaction cannot be reversed twice'
+\echo '        (this schema does not support partial reversals; a'
+\echo '         second correction would double-count)'
+\echo '=============================================================='
+BEGIN;
+UPDATE transactions SET status = 'REVERSED'
+WHERE transaction_reference = 'KP-2026-000005';
+INSERT INTO transactions (transaction_reference, transaction_type, status, currency_code,
+                          reverses_transaction, narration, settled_at)
+SELECT 'KP-2026-999010', 'REVERSAL', 'COMPLETED', 'NGN', t.transaction_id,
+       'First reversal', now()
+FROM transactions t WHERE t.transaction_reference = 'KP-2026-000005';
+SELECT fn_post_entry('KP-2026-999010', 'WAL-CUS-000002-NGN', 'CREDIT', 20000.00);
+SELECT fn_post_entry('KP-2026-999010', 'ACC-BANK-NGN',       'DEBIT',  20000.00);
+-- a second reversal of the same original must be refused
+INSERT INTO transactions (transaction_reference, transaction_type, status, currency_code,
+                          reverses_transaction, narration, settled_at)
+SELECT 'KP-2026-999011', 'REVERSAL', 'COMPLETED', 'NGN', t.transaction_id,
+       'Second reversal of the same original', now()
+FROM transactions t WHERE t.transaction_reference = 'KP-2026-000005';
+ROLLBACK;
+
+\echo ''
+\echo '=============================================================='
+\echo 'TEST 21 NEGATIVE - a zero-value posting is rejected'
+\echo '        (amount > 0, not amount >= 0: a zero posting carries'
+\echo '         no accounting meaning and would pass the balance check)'
+\echo '=============================================================='
+BEGIN;
+INSERT INTO transactions (transaction_reference, transaction_type, status,
+                          currency_code, narration, settled_at)
+VALUES ('KP-2026-999012', 'DEPOSIT', 'COMPLETED', 'NGN', 'Zero posting', now());
+SELECT fn_post_entry('KP-2026-999012', 'ACC-BANK-NGN', 'DEBIT', 0.00);
+ROLLBACK;
