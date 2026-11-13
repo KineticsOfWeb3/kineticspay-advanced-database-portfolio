@@ -1,0 +1,184 @@
+
+==============================================================
+EXPERIMENT 1 - Replication lag under write load
+==============================================================
+Replication is asynchronous by default: the primary acknowledges a
+commit as soon as it is durable LOCALLY, without waiting for the
+standby. Lag is therefore the window in which a committed transaction
+exists on one node only.
+--- baseline, idle ---
+ application_name |   state   | sync_state | bytes_behind | replay_lag 
+------------------+-----------+------------+--------------+------------
+ walreceiver      | streaming | async      |            0 | 
+(1 row)
+
+--- generating 20,000 rows of write load on the primary ---
+
+real	0m0.158s
+user	0m0.035s
+sys	0m0.008s
+--- lag immediately after the write burst ---
+ bytes_behind |    write_lag    |    flush_lag    |   replay_lag    
+--------------+-----------------+-----------------+-----------------
+            0 | 00:00:00.005837 | 00:00:00.007664 | 00:00:00.021359
+(1 row)
+
+--- row counts on each node, read back to back ---
+  primary: 20000
+  standby: 20000
+--- after 2 seconds ---
+  primary: 20000
+  standby: 20000
+
+==============================================================
+EXPERIMENT 2 - CAP with ASYNCHRONOUS commit (AP)
+==============================================================
+The standby is now KILLED, simulating a partition between regions.
+synchronous_commit is 'on', which in PostgreSQL means local durability
+only - no standby is named as synchronous.
+
+Prediction: writes continue to succeed. The system stays AVAILABLE and
+gives up CONSISTENCY across nodes.
+ synchronous_standby_names 
+---------------------------
+ 
+(1 row)
+
+--- killing the standby ---
+ wal_senders_connected 
+-----------------------
+                     0
+(1 row)
+
+--- writing to the primary with the standby down ---
+SET
+INSERT 0 1
+  elapsed: .044945112 s
+  RESULT: the write SUCCEEDED with no standby present -> AVAILABILITY chosen
+
+==============================================================
+EXPERIMENT 3 - CAP with SYNCHRONOUS commit (CP)
+==============================================================
+Now the primary is told to require a synchronous standby, and the
+standby is still down.
+
+Prediction: the write BLOCKS. The primary refuses to acknowledge a
+commit it cannot guarantee on a second node. The system stays
+CONSISTENT and gives up AVAILABILITY.
+
+A statement_timeout of 10s is used so the experiment terminates. Note
+carefully what the timeout does NOT do: it does not roll the
+transaction back on the primary. See the analysis.
+ALTER SYSTEM
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+ synchronous_standby_names 
+---------------------------
+ *
+(1 row)
+
+--- writing to the primary, synchronous, standby still down ---
+SET
+INSERT 0 1
+  elapsed: 682.863811198 s
+  RESULT: the write BLOCKED until the timeout -> CONSISTENCY chosen
+
+--- bringing the standby back and retrying ---
+ application_name |   state   | sync_state 
+------------------+-----------+------------
+ walreceiver      | streaming | sync
+(1 row)
+
+INSERT 0 1
+  elapsed: .034810918 s
+  RESULT: with the standby present the same write completes immediately
+
+--- cost of synchronous commit on normal throughput ---
+  ASYNC: 2,000 inserts
+
+real	0m0.050s
+user	0m0.025s
+sys	0m0.008s
+  SYNC (remote flush): 2,000 inserts
+
+real	0m0.046s
+user	0m0.027s
+sys	0m0.004s
+
+==============================================================
+EXPERIMENT 4 - The data loss async replication permits
+==============================================================
+This is the concrete cost of choosing AP. A transaction is committed on
+the primary while the standby cannot receive it, and then the primary is
+lost and the standby promoted. The acknowledged commit is gone.
+
+For a payment platform this is not abstract: the customer saw a success
+response for a transfer that no longer exists.
+--- marker row committed with the standby CONNECTED ---
+  primary count: 24004
+  standby count: 24004
+--- partition: standby killed ---
+--- committing 3 rows the standby will never see ---
+  these commits were ACKNOWLEDGED to the client:
+  id   |               payload                
+-------+--------------------------------------
+ 24007 | LOST - committed during partition #3
+ 24006 | LOST - committed during partition #2
+ 24005 | LOST - committed during partition #1
+(3 rows)
+
+  primary now holds: 24007 rows
+
+==============================================================
+EXPERIMENT 5 - Failover: promoting the standby
+==============================================================
+--- primary is lost ---
+	Is the server running on that host and accepting TCP/IP connections?
+--- restarting the standby, then promoting it ---
+in recovery before promotion: true
+waiting for server to promote.... done
+server promoted
+--- after promotion ---
+ still_in_recovery | port 
+-------------------+------
+ f                 | 5433
+(1 row)
+
+--- the promoted node is now WRITABLE ---
+INSERT 0 1
+
+==============================================================
+  DATA LOSS MEASURED
+==============================================================
+  rows on the old primary at the moment it died : 24007
+  rows on the promoted node (minus the 1 new)   : 24004
+  acknowledged commits LOST                     : 3
+
+--- are the 'LOST' marker rows present on the promoted node? ---
+ lost_rows_found 
+-----------------
+               0
+(1 row)
+
+ before_partition_row 
+----------------------
+                    1
+(1 row)
+
+--- timeline: a promotion starts a new timeline, which is why the old
+    primary cannot simply be restarted as a standby without rewind ---
+timeline on promoted node: 1
+
+==============================================================
+CLEANUP - rebuild the original topology
+==============================================================
+The old primary's timeline has diverged, so it cannot rejoin as a
+standby without pg_rewind or a fresh base backup. Restarting it
+standalone for the remaining experiments:
+localhost:5432 - accepting connections
+localhost:5433 - accepting connections
+primary: 528763 ledger entries
+promoted node is now an independent primary on 5433

@@ -1,0 +1,42 @@
+==============================================================
+FINDING: statement_timeout does NOT interrupt a SyncRep wait
+==============================================================
+Captured while Experiment 3 was blocked. The backend had already
+run SET statement_timeout = '10s' and had been waiting far longer
+than 10 seconds.
+
+--- pg_stat_activity on the primary ---
+-[ RECORD 1 ]---+----------------------------------------
+pid             | 394
+state           | active
+wait_event_type | IPC
+wait_event      | SyncRep
+waiting_for     | 00:11:22.513938
+query           | SET statement_timeout = '10s';         +
+                |        INSERT INTO replication_load (pa
+
+--- is any standby connected? ---
+ wal_senders 
+-------------
+           0
+(1 row)
+
+ synchronous_standby_names 
+---------------------------
+ *
+(1 row)
+
+
+WHY. Once a transaction has written its commit record and entered
+the SyncRep wait, it is ALREADY DURABLE LOCALLY. statement_timeout
+governs statement execution, not the post-commit replication wait,
+so it cannot fire here. PostgreSQL documents this: the wait is
+interruptible only by a client cancel or backend termination, and
+even then the transaction REMAINS COMMITTED on the primary while
+the client never received an acknowledgement.
+
+That is a worse failure mode than plain unavailability: the
+transaction is in limbo. The client must assume it failed; the
+primary has already applied it. For a payment platform that is the
+classic double-submit hazard, and it is why idempotency keys exist
+(see portfolio-4-nosql metadata.api.idempotency_key).
