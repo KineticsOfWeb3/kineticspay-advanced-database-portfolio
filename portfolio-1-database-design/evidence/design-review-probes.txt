@@ -1,0 +1,148 @@
+================================================================================
+KineticsPay - Portfolio 1 design review
+Adversarial probes against schema v1 (BEFORE hardening)
+================================================================================
+
+Purpose
+-------
+The first version of the schema passed all twelve of its own integrity tests.
+That proves the tests pass; it does not prove the schema is sound. This session
+deliberately attacked the design looking for states the database SHOULD reject
+but does not.
+
+Four probes were run against the live database. All four succeeded - that is,
+all four found a genuine hole.
+
+Environment: PostgreSQL 16.10, database kineticspay, schema v1
+Captured:    13 November 2026
+
+================================================================================
+PROBE A - Can a COMPLETED transaction commit with no ledger entries?
+================================================================================
+
+Hypothesis: trg_ledger_entries_balanced is an AFTER INSERT trigger on
+ledger_entries. If no entry is ever inserted, the trigger never fires, so a
+transaction row claiming COMPLETED status with zero postings would commit.
+
+    BEGIN;
+    INSERT INTO transactions (transaction_reference, transaction_type, status,
+                              currency_code, narration, settled_at)
+    VALUES ('KP-2026-888001','TRANSFER','COMPLETED','NGN','Empty but completed', now());
+    COMMIT;
+
+RESULT - the hypothesis was correct. The transaction committed:
+
+     transaction_reference |  status   | entries
+    -----------------------+-----------+---------
+     KP-2026-888001        | COMPLETED |       0
+    (1 row)
+
+SEVERITY: High. A settled payment that moved no money is recorded as settled.
+Reconciliation against the partner bank would not catch it, because no posting
+exists to reconcile.
+
+================================================================================
+PROBE B - Can session_replication_role bypass the append-only trigger?
+================================================================================
+
+Hypothesis: PostgreSQL suppresses ordinary user triggers when
+session_replication_role is set to 'replica'. If so, the append-only guarantee
+is only a convention.
+
+    BEGIN;
+    SET LOCAL session_replication_role = 'replica';
+    UPDATE ledger_entries SET amount = 999999.00 WHERE entry_id = 1;
+    SELECT entry_id, amount FROM ledger_entries WHERE entry_id = 1;
+    ROLLBACK;
+
+RESULT - the hypothesis was correct. The update succeeded:
+
+    UPDATE 1
+     entry_id |   amount
+    ----------+-------------
+            1 | 999999.0000
+    (1 row)
+
+SEVERITY: High. A committed financial posting was silently rewritten. The
+append-only claim in the documentation was overstated.
+
+================================================================================
+PROBE C - Does minor_unit actually constrain posting precision?
+================================================================================
+
+Hypothesis: amount is NUMERIC(20,4) while NGN declares minor_unit = 2. Nothing
+connects the two, so a sub-kobo amount would be accepted.
+
+    BEGIN;
+    INSERT INTO transactions (...) VALUES ('KP-2026-888002','DEPOSIT','COMPLETED','NGN',...);
+    SELECT fn_post_entry('KP-2026-888002','ACC-BANK-NGN','DEBIT',100.00019);
+    SELECT fn_post_entry('KP-2026-888002','WAL-CUS-000001-NGN','CREDIT',100.00019);
+    COMMIT;
+
+RESULT - the hypothesis was correct. The amount was silently rounded to four
+decimal places and stored:
+
+      amount
+    ----------
+     100.0002
+     100.0002
+    (2 rows)
+
+SEVERITY: Medium. The balance is now un-settleable: no payment rail can move
+0.0002 of a naira. The four decimal places were intended for intermediate
+percentage-fee arithmetic, not for stored postings.
+
+================================================================================
+PROBE D - Must a REVERSAL mirror the transaction it reverses?
+================================================================================
+
+Hypothesis: transactions_reversal_chk only requires that a REVERSAL point at
+some earlier transaction. Nothing ties the reversal's postings to the
+original's.
+
+    BEGIN;
+    INSERT INTO transactions (... reverses_transaction ...)
+    SELECT 'KP-2026-888003','REVERSAL','COMPLETED','NGN', t.transaction_id, ...
+    FROM transactions t WHERE t.transaction_reference = 'KP-2026-000001';
+    -- original moved 50,000 between the bank account and Amaka's wallet.
+    -- this "reversal" moves 7.00 between Tunde's wallet and fee revenue.
+    SELECT fn_post_entry('KP-2026-888003','WAL-CUS-000002-NGN','DEBIT',7.00);
+    SELECT fn_post_entry('KP-2026-888003','ACC-FEES-NGN','CREDIT',7.00);
+    COMMIT;
+
+RESULT - the hypothesis was correct. The transaction committed. A reversal of a
+50,000 deposit was recorded that debited an unrelated customer by 7.00, and the
+original transaction was never even marked REVERSED.
+
+SEVERITY: High. The reversal mechanism is the schema's only sanctioned route for
+correcting the ledger. If a reversal need not relate to what it reverses, the
+append-only guarantee becomes decorative: any balance can be altered by posting
+a "reversal" of an unrelated transaction.
+
+================================================================================
+OUTCOME
+================================================================================
+
+All four gaps were closed in schema.sql section 12 (HARDENING):
+
+  Probe A -> trg_transactions_posting_matches_status
+             Deferred constraint trigger on transactions, so the check runs even
+             when no posting is attempted. Also enforces the converse: PENDING
+             and FAILED transactions must post nothing.
+
+  Probe B -> ALTER TABLE ... ENABLE ALWAYS TRIGGER
+             plus the kineticspay_app role, which is never granted UPDATE or
+             DELETE on ledger_entries at all.
+
+  Probe C -> trg_ledger_entries_amount_precision
+             Validates each posting against its currency's minor_unit.
+
+  Probe D -> trg_ledger_entries_reversal_mirrors
+             A FULL OUTER JOIN comparison requiring every original posting to
+             have exactly one counterpart in the reversal with the same account,
+             the same amount and the opposite direction - and requiring the
+             original to be marked REVERSED.
+
+Regression tests 13 to 19 in verify.sql reproduce each probe and confirm it is
+now rejected. Test 18 confirms a CORRECTLY mirrored reversal is still accepted,
+so the new constraint has not simply banned reversals outright.
