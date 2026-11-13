@@ -1,0 +1,283 @@
+
+==============================================================
+EXPERIMENT 2 - Single-column versus composite index
+==============================================================
+Query: the wallet-statement query a mobile app actually issues -
+most recent 50 postings for one account, newest first.
+
+    SELECT transaction_id, account_id, amount, posted_at
+    FROM ledger_entries
+    WHERE account_id = 3547
+    ORDER BY posted_at DESC
+    LIMIT 50;
+
+With a single-column index on (account_id) the engine can find the rows but
+must still SORT them. A composite index on (account_id, posted_at DESC)
+stores them already ordered, so the sort node should disappear entirely.
+
+==============================================================
+2A - single-column index on (account_id) only
+==============================================================
+
+--- single-column + sort | run 1 ---
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2101.60..2101.72 rows=50 width=32) (actual time=1.383..1.393 rows=50 loops=1)
+   Buffers: shared hit=664
+   ->  Sort  (cost=2101.60..2103.49 rows=758 width=32) (actual time=1.382..1.387 rows=50 loops=1)
+         Sort Key: posted_at DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=664
+         ->  Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=32) (actual time=0.177..1.195 rows=694 loops=1)
+               Recheck Cond: (account_id = 3547)
+               Heap Blocks: exact=654
+               Buffers: shared hit=661
+               ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.095..0.095 rows=694 loops=1)
+                     Index Cond: (account_id = 3547)
+                     Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=120 read=4
+ Planning Time: 0.450 ms
+ Execution Time: 1.441 ms
+(17 rows)
+
+
+--- single-column + sort | run 2 ---
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2101.60..2101.72 rows=50 width=32) (actual time=1.134..1.141 rows=50 loops=1)
+   Buffers: shared hit=664
+   ->  Sort  (cost=2101.60..2103.49 rows=758 width=32) (actual time=1.133..1.136 rows=50 loops=1)
+         Sort Key: posted_at DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=664
+         ->  Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=32) (actual time=0.180..0.984 rows=694 loops=1)
+               Recheck Cond: (account_id = 3547)
+               Heap Blocks: exact=654
+               Buffers: shared hit=661
+               ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.099..0.099 rows=694 loops=1)
+                     Index Cond: (account_id = 3547)
+                     Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=124
+ Planning Time: 0.330 ms
+ Execution Time: 1.188 ms
+(17 rows)
+
+
+--- single-column + sort | run 3 ---
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2101.60..2101.72 rows=50 width=32) (actual time=1.458..1.467 rows=50 loops=1)
+   Buffers: shared hit=664
+   ->  Sort  (cost=2101.60..2103.49 rows=758 width=32) (actual time=1.456..1.460 rows=50 loops=1)
+         Sort Key: posted_at DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=664
+         ->  Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=32) (actual time=0.254..1.182 rows=694 loops=1)
+               Recheck Cond: (account_id = 3547)
+               Heap Blocks: exact=654
+               Buffers: shared hit=661
+               ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.104..0.105 rows=694 loops=1)
+                     Index Cond: (account_id = 3547)
+                     Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=124
+ Planning Time: 0.388 ms
+ Execution Time: 1.524 ms
+(17 rows)
+
+
+==============================================================
+2B - CREATE COMPOSITE INDEX (account_id, posted_at DESC)
+==============================================================
+CREATE INDEX
+ANALYZE
+ composite_index_size 
+----------------------
+ 16 MB
+(1 row)
+
+
+==============================================================
+2B - with composite index
+==============================================================
+
+--- composite, no sort | run 1 ---
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..190.70 rows=50 width=32) (actual time=0.050..0.239 rows=50 loops=1)
+   Buffers: shared hit=53 read=3
+   ->  Index Scan using idx_le_account_posted on ledger_entries  (cost=0.42..2348.40 rows=617 width=32) (actual time=0.049..0.232 rows=50 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=53 read=3
+ Planning:
+   Buffers: shared hit=149 read=1
+ Planning Time: 0.566 ms
+ Execution Time: 0.276 ms
+(9 rows)
+
+
+--- composite, no sort | run 2 ---
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..190.70 rows=50 width=32) (actual time=0.032..0.187 rows=50 loops=1)
+   Buffers: shared hit=56
+   ->  Index Scan using idx_le_account_posted on ledger_entries  (cost=0.42..2348.40 rows=617 width=32) (actual time=0.031..0.181 rows=50 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=56
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 0.416 ms
+ Execution Time: 0.216 ms
+(9 rows)
+
+
+--- composite, no sort | run 3 ---
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..190.70 rows=50 width=32) (actual time=0.072..0.292 rows=50 loops=1)
+   Buffers: shared hit=56
+   ->  Index Scan using idx_le_account_posted on ledger_entries  (cost=0.42..2348.40 rows=617 width=32) (actual time=0.070..0.283 rows=50 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=56
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 0.490 ms
+ Execution Time: 0.332 ms
+(9 rows)
+
+
+==============================================================
+2C - the composite index also serves a range predicate
+==============================================================
+
+--- composite range | run 1 ---
+                                                                                         QUERY PLAN                                                                                         
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=294.31..294.32 rows=1 width=40) (actual time=0.332..0.332 rows=1 loops=1)
+   Buffers: shared hit=92 read=1
+   ->  Bitmap Heap Scan on ledger_entries  (cost=5.43..293.92 rows=79 width=8) (actual time=0.056..0.310 rows=87 loops=1)
+         Recheck Cond: ((account_id = 3547) AND (posted_at >= '2026-08-01 00:00:00+01'::timestamp with time zone) AND (posted_at < '2026-09-01 00:00:00+01'::timestamp with time zone))
+         Heap Blocks: exact=86
+         Buffers: shared hit=92 read=1
+         ->  Bitmap Index Scan on idx_le_account_posted  (cost=0.00..5.41 rows=79 width=0) (actual time=0.040..0.040 rows=87 loops=1)
+               Index Cond: ((account_id = 3547) AND (posted_at >= '2026-08-01 00:00:00+01'::timestamp with time zone) AND (posted_at < '2026-09-01 00:00:00+01'::timestamp with time zone))
+               Buffers: shared hit=6 read=1
+ Planning:
+   Buffers: shared hit=155 read=5
+ Planning Time: 0.587 ms
+ Execution Time: 0.403 ms
+(13 rows)
+
+
+--- composite range | run 2 ---
+                                                                                         QUERY PLAN                                                                                         
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=294.31..294.32 rows=1 width=40) (actual time=0.357..0.358 rows=1 loops=1)
+   Buffers: shared hit=93
+   ->  Bitmap Heap Scan on ledger_entries  (cost=5.43..293.92 rows=79 width=8) (actual time=0.046..0.333 rows=87 loops=1)
+         Recheck Cond: ((account_id = 3547) AND (posted_at >= '2026-08-01 00:00:00+01'::timestamp with time zone) AND (posted_at < '2026-09-01 00:00:00+01'::timestamp with time zone))
+         Heap Blocks: exact=86
+         Buffers: shared hit=93
+         ->  Bitmap Index Scan on idx_le_account_posted  (cost=0.00..5.41 rows=79 width=0) (actual time=0.029..0.030 rows=87 loops=1)
+               Index Cond: ((account_id = 3547) AND (posted_at >= '2026-08-01 00:00:00+01'::timestamp with time zone) AND (posted_at < '2026-09-01 00:00:00+01'::timestamp with time zone))
+               Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=160
+ Planning Time: 0.492 ms
+ Execution Time: 0.422 ms
+(13 rows)
+
+
+--- composite range | run 3 ---
+                                                                                         QUERY PLAN                                                                                         
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=294.31..294.32 rows=1 width=40) (actual time=0.447..0.448 rows=1 loops=1)
+   Buffers: shared hit=93
+   ->  Bitmap Heap Scan on ledger_entries  (cost=5.43..293.92 rows=79 width=8) (actual time=0.055..0.415 rows=87 loops=1)
+         Recheck Cond: ((account_id = 3547) AND (posted_at >= '2026-08-01 00:00:00+01'::timestamp with time zone) AND (posted_at < '2026-09-01 00:00:00+01'::timestamp with time zone))
+         Heap Blocks: exact=86
+         Buffers: shared hit=93
+         ->  Bitmap Index Scan on idx_le_account_posted  (cost=0.00..5.41 rows=79 width=0) (actual time=0.038..0.038 rows=87 loops=1)
+               Index Cond: ((account_id = 3547) AND (posted_at >= '2026-08-01 00:00:00+01'::timestamp with time zone) AND (posted_at < '2026-09-01 00:00:00+01'::timestamp with time zone))
+               Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=160
+ Planning Time: 0.798 ms
+ Execution Time: 0.527 ms
+(13 rows)
+
+
+==============================================================
+2D - but NOT a query that filters on the second column alone
+==============================================================
+A composite index is ordered by its leading column first. A predicate on
+posted_at with no account_id cannot use it efficiently - the leading column
+is unconstrained, so there is no contiguous range to scan.
+
+--- leading column missing | run 1 ---
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9076.52..9076.53 rows=1 width=8) (actual time=31.051..33.404 rows=1 loops=1)
+   Buffers: shared hit=751 read=4562
+   ->  Gather  (cost=9076.30..9076.51 rows=2 width=8) (actual time=30.923..33.396 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=751 read=4562
+         ->  Partial Aggregate  (cost=8076.30..8076.31 rows=1 width=8) (actual time=25.983..25.984 rows=1 loops=3)
+               Buffers: shared hit=751 read=4562
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=3974 width=0) (actual time=0.047..25.666 rows=3198 loops=3)
+                     Filter: (posted_at >= '2026-10-28 00:00:00+01'::timestamp with time zone)
+                     Rows Removed by Filter: 173018
+                     Buffers: shared hit=751 read=4562
+ Planning:
+   Buffers: shared hit=128
+ Planning Time: 0.499 ms
+ Execution Time: 33.496 ms
+(16 rows)
+
+
+--- leading column missing | run 2 ---
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9076.52..9076.53 rows=1 width=8) (actual time=33.175..34.970 rows=1 loops=1)
+   Buffers: shared hit=847 read=4466
+   ->  Gather  (cost=9076.30..9076.51 rows=2 width=8) (actual time=33.076..34.963 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=847 read=4466
+         ->  Partial Aggregate  (cost=8076.30..8076.31 rows=1 width=8) (actual time=29.035..29.036 rows=1 loops=3)
+               Buffers: shared hit=847 read=4466
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=3974 width=0) (actual time=0.030..28.694 rows=3198 loops=3)
+                     Filter: (posted_at >= '2026-10-28 00:00:00+01'::timestamp with time zone)
+                     Rows Removed by Filter: 173018
+                     Buffers: shared hit=847 read=4466
+ Planning:
+   Buffers: shared hit=128
+ Planning Time: 0.336 ms
+ Execution Time: 35.040 ms
+(16 rows)
+
+
+--- leading column missing | run 3 ---
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9076.52..9076.53 rows=1 width=8) (actual time=26.776..26.974 rows=1 loops=1)
+   Buffers: shared hit=943 read=4370
+   ->  Gather  (cost=9076.30..9076.51 rows=2 width=8) (actual time=26.769..26.968 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=943 read=4370
+         ->  Partial Aggregate  (cost=8076.30..8076.31 rows=1 width=8) (actual time=21.125..21.126 rows=1 loops=3)
+               Buffers: shared hit=943 read=4370
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=3974 width=0) (actual time=0.028..20.863 rows=3198 loops=3)
+                     Filter: (posted_at >= '2026-10-28 00:00:00+01'::timestamp with time zone)
+                     Rows Removed by Filter: 173018
+                     Buffers: shared hit=943 read=4370
+ Planning:
+   Buffers: shared hit=128
+ Planning Time: 0.426 ms
+ Execution Time: 27.066 ms
+(16 rows)
+

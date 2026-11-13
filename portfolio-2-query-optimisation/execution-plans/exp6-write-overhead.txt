@@ -1,0 +1,52 @@
+
+==============================================================
+EXPERIMENT 6 - Index write overhead and storage cost
+==============================================================
+Indexes are not free. Every INSERT must also maintain every index on the
+table, and each index occupies storage.
+
+Measured on a copy of the ledger structure WITHOUT the Portfolio 1 integrity
+triggers, so the figures isolate index maintenance rather than trigger cost.
+100,000 rows are inserted into an unindexed table, then the same 100,000
+into an identically shaped table carrying three indexes.
+
+==============================================================
+6A - inserting 100,000 rows into an UNINDEXED table
+==============================================================
+Timing is on.
+INSERT 0 100000
+Time: 91.793 ms
+  heap   | indexes 
+---------+---------
+ 7984 kB | 0 bytes
+(1 row)
+
+
+==============================================================
+6B - same 100,000 rows into a table carrying THREE indexes
+==============================================================
+Timing is on.
+INSERT 0 100000
+Time: 544.265 ms
+  heap   | indexes 
+---------+---------
+ 7984 kB | 7184 kB
+(1 row)
+
+
+==============================================================
+6C - storage cost of the real ledger's indexes
+==============================================================
+               index_name               |  size   | times_used 
+----------------------------------------+---------+------------
+ ledger_entries_tx_account_direction_uq | 20 MB   |         38
+ idx_le_account_posted                  | 16 MB   |         35
+ ledger_entries_pkey                    | 11 MB   |          1
+ idx_le_account                         | 3736 kB |         42
+(4 rows)
+
+ heap  | all_indexes | index_pct_of_heap 
+-------+-------------+-------------------
+ 42 MB | 51 MB       |             123.7
+(1 row)
+

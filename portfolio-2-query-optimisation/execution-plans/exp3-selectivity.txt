@@ -1,0 +1,318 @@
+
+==============================================================
+EXPERIMENT 3 - Query selectivity and the planner's crossover point
+==============================================================
+The same query shape against four accounts of very different volume. Every
+index needed is already in place, so any choice of a sequential scan is the
+planner deciding the index is not worth using - not the absence of one.
+
+    account 13 :      6 postings  (0.001 % of the table)
+    account 3547   :    694 postings  (0.13 %)
+    account 2415  : 56,297 postings  (10.65 %)
+    account 1     : 115,724 postings (21.89 %)
+
+An index lookup costs a random I/O per matching row. Once enough of the
+table matches, reading it sequentially is cheaper. That crossover is what
+this experiment locates.
+
+==============================================================
+account_id = 13
+==============================================================
+ matching_rows | pct_of_table 
+---------------+--------------
+             6 |        0.001
+(1 row)
+
+
+--- account 13 | run 1 ---
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=4.74..158.45 rows=41 width=32) (actual time=0.075..0.119 rows=6 loops=1)
+   Recheck Cond: (account_id = 13)
+   Heap Blocks: exact=6
+   Buffers: shared hit=6 read=6
+   ->  Bitmap Index Scan on idx_le_account_posted  (cost=0.00..4.73 rows=41 width=0) (actual time=0.043..0.043 rows=6 loops=1)
+         Index Cond: (account_id = 13)
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.470 ms
+ Execution Time: 0.187 ms
+(11 rows)
+
+
+--- account 13 | run 2 ---
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=4.74..158.45 rows=41 width=32) (actual time=0.070..0.080 rows=6 loops=1)
+   Recheck Cond: (account_id = 13)
+   Heap Blocks: exact=6
+   Buffers: shared hit=12
+   ->  Bitmap Index Scan on idx_le_account_posted  (cost=0.00..4.73 rows=41 width=0) (actual time=0.053..0.053 rows=6 loops=1)
+         Index Cond: (account_id = 13)
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.479 ms
+ Execution Time: 0.147 ms
+(11 rows)
+
+
+--- account 13 | run 3 ---
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=4.74..158.45 rows=41 width=32) (actual time=0.063..0.072 rows=6 loops=1)
+   Recheck Cond: (account_id = 13)
+   Heap Blocks: exact=6
+   Buffers: shared hit=12
+   ->  Bitmap Index Scan on idx_le_account_posted  (cost=0.00..4.73 rows=41 width=0) (actual time=0.045..0.045 rows=6 loops=1)
+         Index Cond: (account_id = 13)
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.480 ms
+ Execution Time: 0.141 ms
+(11 rows)
+
+
+==============================================================
+account_id = 3547
+==============================================================
+ matching_rows | pct_of_table 
+---------------+--------------
+           694 |        0.131
+(1 row)
+
+
+--- account 3547 | run 1 ---
+                                                        QUERY PLAN                                                         
+---------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=9.21..1772.06 rows=617 width=32) (actual time=0.187..0.966 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=661
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..9.05 rows=617 width=0) (actual time=0.100..0.100 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.336 ms
+ Execution Time: 1.046 ms
+(11 rows)
+
+
+--- account 3547 | run 2 ---
+                                                        QUERY PLAN                                                         
+---------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=9.21..1772.06 rows=617 width=32) (actual time=0.212..0.986 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=661
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..9.05 rows=617 width=0) (actual time=0.132..0.132 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.340 ms
+ Execution Time: 1.068 ms
+(11 rows)
+
+
+--- account 3547 | run 3 ---
+                                                        QUERY PLAN                                                         
+---------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=9.21..1772.06 rows=617 width=32) (actual time=0.186..1.044 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=661
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..9.05 rows=617 width=0) (actual time=0.105..0.106 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.363 ms
+ Execution Time: 1.133 ms
+(11 rows)
+
+
+==============================================================
+account_id = 2415
+==============================================================
+ matching_rows | pct_of_table 
+---------------+--------------
+         56297 |       10.649
+(1 row)
+
+
+--- account 2415 | run 1 ---
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=634.71..6648.17 rows=56037 width=32) (actual time=3.525..52.945 rows=56297 loops=1)
+   Recheck Cond: (account_id = 2415)
+   Heap Blocks: exact=5259
+   Buffers: shared hit=1044 read=4268
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..620.70 rows=56037 width=0) (actual time=2.544..2.545 rows=56297 loops=1)
+         Index Cond: (account_id = 2415)
+         Buffers: shared hit=53
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.512 ms
+ Execution Time: 56.449 ms
+(11 rows)
+
+
+--- account 2415 | run 2 ---
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=634.71..6648.17 rows=56037 width=32) (actual time=2.587..18.809 rows=56297 loops=1)
+   Recheck Cond: (account_id = 2415)
+   Heap Blocks: exact=5259
+   Buffers: shared hit=5312
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..620.70 rows=56037 width=0) (actual time=1.803..1.804 rows=56297 loops=1)
+         Index Cond: (account_id = 2415)
+         Buffers: shared hit=53
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.321 ms
+ Execution Time: 21.300 ms
+(11 rows)
+
+
+--- account 2415 | run 3 ---
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=634.71..6648.17 rows=56037 width=32) (actual time=2.567..19.051 rows=56297 loops=1)
+   Recheck Cond: (account_id = 2415)
+   Heap Blocks: exact=5259
+   Buffers: shared hit=5312
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..620.70 rows=56037 width=0) (actual time=1.743..1.744 rows=56297 loops=1)
+         Index Cond: (account_id = 2415)
+         Buffers: shared hit=53
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.380 ms
+ Execution Time: 21.529 ms
+(11 rows)
+
+
+==============================================================
+account_id = 1
+==============================================================
+ matching_rows | pct_of_table 
+---------------+--------------
+        115724 |       21.891
+(1 row)
+
+
+--- account 1 | run 1 ---
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=1311.72..8075.19 rows=116038 width=32) (actual time=3.387..28.087 rows=115724 loops=1)
+   Recheck Cond: (account_id = 1)
+   Heap Blocks: exact=5258
+   Buffers: shared hit=5361
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..1282.71 rows=116038 width=0) (actual time=2.600..2.601 rows=115724 loops=1)
+         Index Cond: (account_id = 1)
+         Buffers: shared hit=103
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.365 ms
+ Execution Time: 33.161 ms
+(11 rows)
+
+
+--- account 1 | run 2 ---
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=1311.72..8075.19 rows=116038 width=32) (actual time=3.404..28.032 rows=115724 loops=1)
+   Recheck Cond: (account_id = 1)
+   Heap Blocks: exact=5258
+   Buffers: shared hit=5361
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..1282.71 rows=116038 width=0) (actual time=2.630..2.630 rows=115724 loops=1)
+         Index Cond: (account_id = 1)
+         Buffers: shared hit=103
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.369 ms
+ Execution Time: 33.015 ms
+(11 rows)
+
+
+--- account 1 | run 3 ---
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=1311.72..8075.19 rows=116038 width=32) (actual time=6.354..39.600 rows=115724 loops=1)
+   Recheck Cond: (account_id = 1)
+   Heap Blocks: exact=5258
+   Buffers: shared hit=5361
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..1282.71 rows=116038 width=0) (actual time=5.474..5.474 rows=115724 loops=1)
+         Index Cond: (account_id = 1)
+         Buffers: shared hit=103
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.327 ms
+ Execution Time: 45.146 ms
+(11 rows)
+
+
+==============================================================
+3B - forcing the index on the high-volume account, to show WHY the planner refused
+==============================================================
+SET
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=1311.72..8075.19 rows=116038 width=32) (actual time=5.543..34.797 rows=115724 loops=1)
+   Recheck Cond: (account_id = 1)
+   Heap Blocks: exact=5258
+   Buffers: shared hit=5361
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..1282.71 rows=116038 width=0) (actual time=4.569..4.570 rows=115724 loops=1)
+         Index Cond: (account_id = 1)
+         Buffers: shared hit=103
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.445 ms
+ Execution Time: 40.638 ms
+(11 rows)
+
+
+==============================================================
+3C - LOCATING THE CROSSOVER PRECISELY
+==============================================================
+Experiment 3 did NOT find a sequential scan, even at 21.9% selectivity: the
+planner used a Bitmap Heap Scan throughout. That is itself the finding. A
+bitmap scan is the planner's middle ground - it collects matching row
+locations from the index first, sorts them into physical page order, and
+then reads the heap mostly sequentially. It therefore stays viable far
+longer than a plain Index Scan, which would issue one random read per row.
+
+So the real question is not "index or sequential scan" but "at what
+selectivity does even a bitmap scan stop being worth it". This sweep varies
+the predicate width against the same indexed column to find out.
+
+  target 1  %  ->  account_id <= 1      rows=115725  (21.9 % of table)  node=Bitmap Heap Scan   time=36.773 ms
+  target 5  %  ->  account_id <= 1      rows=115725  (21.9 % of table)  node=Bitmap Heap Scan   time=40.006 ms
+  target 10 %  ->  account_id <= 1      rows=115725  (21.9 % of table)  node=Bitmap Heap Scan   time=39.588 ms
+  target 20 %  ->  account_id <= 1      rows=115725  (21.9 % of table)  node=Bitmap Heap Scan   time=40.066 ms
+  target 30 %  ->  account_id <= 3      rows=186615  (35.3 % of table)  node=Parallel Seq Scan  time=40.285 ms
+  target 40 %  ->  account_id <= 281    rows=216975  (41.0 % of table)  node=Parallel Seq Scan  time=59.919 ms
+  target 50 %  ->  account_id <= 1419   rows=264352  (50.0 % of table)  node=Parallel Seq Scan  time=51.086 ms
+  target 60 %  ->  account_id <= 2415   rows=355084  (67.2 % of table)  node=Parallel Seq Scan  time=73.625 ms
+  target 75 %  ->  account_id <= 3427   rows=409835  (77.5 % of table)  node=Parallel Seq Scan  time=75.343 ms
+
+Repeating at the transition point with enable_bitmapscan disabled, to
+show what a plain Index Scan would have cost at that selectivity:
+SET
+SET
+                                                                     QUERY PLAN                                                                     
+----------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=24132.30..24132.31 rows=1 width=40) (actual time=62.943..62.945 rows=1 loops=1)
+   Buffers: shared hit=5359
+   ->  Index Scan using idx_le_account on ledger_entries  (cost=0.42..23552.08 rows=116044 width=8) (actual time=0.070..33.502 rows=115725 loops=1)
+         Index Cond: (account_id <= 1)
+         Buffers: shared hit=5359
+ Planning:
+   Buffers: shared hit=169
+ Planning Time: 0.672 ms
+ Execution Time: 63.028 ms
+(9 rows)
+

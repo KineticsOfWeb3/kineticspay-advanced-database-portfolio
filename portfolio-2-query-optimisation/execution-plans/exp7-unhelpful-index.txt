@@ -1,0 +1,259 @@
+
+==============================================================
+EXPERIMENT 7 - An index that does not help
+==============================================================
+Not every index earns its place. direction has exactly two distinct values
+across 528,000+ rows, so any predicate on it matches roughly half the table.
+An index offers no way to avoid reading most of the heap, and the planner
+should ignore it.
+
+This experiment is included deliberately: showing an index that FAILS to
+help demonstrates understanding of why indexes work, which a collection of
+successful examples does not.
+
+==============================================================
+7A - cardinality of the candidate column
+==============================================================
+ direction | count  | pct  
+-----------+--------+------
+ DEBIT     | 232617 | 44.0
+ CREDIT    | 296032 | 56.0
+(2 rows)
+
+    attname    | n_distinct | correlation 
+---------------+------------+-------------
+ account_id    |       2635 |  0.09094805
+ currency_code |          2 |  0.89989966
+ direction     |          2 |   0.5034503
+ posted_at     | -0.4179462 |  0.00665345
+(4 rows)
+
+
+==============================================================
+7B - before the index
+==============================================================
+
+--- no direction index | run 1 ---
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9553.25..9553.26 rows=1 width=40) (actual time=45.847..48.230 rows=1 loops=1)
+   Buffers: shared hit=5313
+   ->  Gather  (cost=9553.02..9553.23 rows=2 width=40) (actual time=45.757..48.218 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5313
+         ->  Partial Aggregate  (cost=8553.02..8553.03 rows=1 width=40) (actual time=41.665..41.666 rows=1 loops=3)
+               Buffers: shared hit=5313
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=97330 width=8) (actual time=0.012..21.478 rows=77539 loops=3)
+                     Filter: (direction = 'DEBIT'::entry_direction_t)
+                     Rows Removed by Filter: 98677
+                     Buffers: shared hit=5313
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 0.353 ms
+ Execution Time: 48.299 ms
+(16 rows)
+
+
+--- no direction index | run 2 ---
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9553.25..9553.26 rows=1 width=40) (actual time=47.948..50.358 rows=1 loops=1)
+   Buffers: shared hit=5313
+   ->  Gather  (cost=9553.02..9553.23 rows=2 width=40) (actual time=47.934..50.346 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5313
+         ->  Partial Aggregate  (cost=8553.02..8553.03 rows=1 width=40) (actual time=43.011..43.012 rows=1 loops=3)
+               Buffers: shared hit=5313
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=97330 width=8) (actual time=0.012..29.494 rows=77539 loops=3)
+                     Filter: (direction = 'DEBIT'::entry_direction_t)
+                     Rows Removed by Filter: 98677
+                     Buffers: shared hit=5313
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 0.414 ms
+ Execution Time: 50.420 ms
+(16 rows)
+
+
+--- no direction index | run 3 ---
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9553.25..9553.26 rows=1 width=40) (actual time=47.793..47.866 rows=1 loops=1)
+   Buffers: shared hit=5313
+   ->  Gather  (cost=9553.02..9553.23 rows=2 width=40) (actual time=45.048..47.845 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5313
+         ->  Partial Aggregate  (cost=8553.02..8553.03 rows=1 width=40) (actual time=41.350..41.351 rows=1 loops=3)
+               Buffers: shared hit=5313
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=97330 width=8) (actual time=0.011..28.335 rows=77539 loops=3)
+                     Filter: (direction = 'DEBIT'::entry_direction_t)
+                     Rows Removed by Filter: 98677
+                     Buffers: shared hit=5313
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 0.367 ms
+ Execution Time: 47.933 ms
+(16 rows)
+
+
+==============================================================
+7C - CREATE INDEX on direction
+==============================================================
+Timing is on.
+CREATE INDEX
+Time: 251.835 ms
+ANALYZE
+ wasted_index_size 
+-------------------
+ 3600 kB
+(1 row)
+
+
+==============================================================
+7D - after the index (expect the planner to ignore it)
+==============================================================
+
+--- with direction index | run 1 ---
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9553.23..9553.24 rows=1 width=40) (actual time=58.452..61.826 rows=1 loops=1)
+   Buffers: shared hit=5313
+   ->  Gather  (cost=9553.00..9553.21 rows=2 width=40) (actual time=58.292..61.809 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5313
+         ->  Partial Aggregate  (cost=8553.00..8553.01 rows=1 width=40) (actual time=54.325..54.327 rows=1 loops=3)
+               Buffers: shared hit=5313
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.38 rows=97323 width=8) (actual time=0.014..32.522 rows=77539 loops=3)
+                     Filter: (direction = 'DEBIT'::entry_direction_t)
+                     Rows Removed by Filter: 98677
+                     Buffers: shared hit=5313
+ Planning:
+   Buffers: shared hit=162 read=1
+ Planning Time: 0.865 ms
+ Execution Time: 61.899 ms
+(16 rows)
+
+
+--- with direction index | run 2 ---
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9553.23..9553.24 rows=1 width=40) (actual time=55.527..58.303 rows=1 loops=1)
+   Buffers: shared hit=5313
+   ->  Gather  (cost=9553.00..9553.21 rows=2 width=40) (actual time=55.304..58.283 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5313
+         ->  Partial Aggregate  (cost=8553.00..8553.01 rows=1 width=40) (actual time=51.330..51.332 rows=1 loops=3)
+               Buffers: shared hit=5313
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.38 rows=97323 width=8) (actual time=0.015..31.021 rows=77539 loops=3)
+                     Filter: (direction = 'DEBIT'::entry_direction_t)
+                     Rows Removed by Filter: 98677
+                     Buffers: shared hit=5313
+ Planning:
+   Buffers: shared hit=159
+ Planning Time: 0.572 ms
+ Execution Time: 58.384 ms
+(16 rows)
+
+
+--- with direction index | run 3 ---
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=9553.23..9553.24 rows=1 width=40) (actual time=56.288..57.414 rows=1 loops=1)
+   Buffers: shared hit=5313
+   ->  Gather  (cost=9553.00..9553.21 rows=2 width=40) (actual time=53.947..57.391 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5313
+         ->  Partial Aggregate  (cost=8553.00..8553.01 rows=1 width=40) (actual time=49.799..49.800 rows=1 loops=3)
+               Buffers: shared hit=5313
+               ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.38 rows=97323 width=8) (actual time=0.013..28.231 rows=77539 loops=3)
+                     Filter: (direction = 'DEBIT'::entry_direction_t)
+                     Rows Removed by Filter: 98677
+                     Buffers: shared hit=5313
+ Planning:
+   Buffers: shared hit=159
+ Planning Time: 0.449 ms
+ Execution Time: 57.495 ms
+(16 rows)
+
+
+==============================================================
+7E - confirming the index was never used
+==============================================================
+              indexrelname              | times_used |  size   
+----------------------------------------+------------+---------
+ idx_le_direction                       |          0 | 3600 kB
+ ledger_entries_pkey                    |          1 | 11 MB
+ idx_le_account_posted                  |         35 | 16 MB
+ ledger_entries_tx_account_direction_uq |         38 | 20 MB
+ idx_le_account                         |         42 | 3736 kB
+(5 rows)
+
+
+==============================================================
+7F - the same column IS useful when combined with a selective one
+==============================================================
+direction is not useless in principle - it is useless ALONE. As the trailing
+column of a selective composite index it becomes worthwhile.
+
+--- account+direction composite | run 1 ---
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=1151.60..1151.61 rows=1 width=40) (actual time=1.337..1.338 rows=1 loops=1)
+   Buffers: shared hit=304 read=3
+   ->  Bitmap Heap Scan on ledger_entries  (cost=8.15..1149.78 rows=363 width=8) (actual time=0.207..1.236 rows=306 loops=1)
+         Recheck Cond: ((account_id = 3547) AND (direction = 'DEBIT'::entry_direction_t))
+         Heap Blocks: exact=301
+         Buffers: shared hit=304 read=3
+         ->  Bitmap Index Scan on idx_le_account_direction  (cost=0.00..8.05 rows=363 width=0) (actual time=0.165..0.166 rows=306 loops=1)
+               Index Cond: ((account_id = 3547) AND (direction = 'DEBIT'::entry_direction_t))
+               Buffers: shared hit=3 read=3
+ Planning:
+   Buffers: shared hit=181 read=1
+ Planning Time: 0.712 ms
+ Execution Time: 1.434 ms
+(13 rows)
+
+
+--- account+direction composite | run 2 ---
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=1151.60..1151.61 rows=1 width=40) (actual time=0.785..0.786 rows=1 loops=1)
+   Buffers: shared hit=307
+   ->  Bitmap Heap Scan on ledger_entries  (cost=8.15..1149.78 rows=363 width=8) (actual time=0.117..0.725 rows=306 loops=1)
+         Recheck Cond: ((account_id = 3547) AND (direction = 'DEBIT'::entry_direction_t))
+         Heap Blocks: exact=301
+         Buffers: shared hit=307
+         ->  Bitmap Index Scan on idx_le_account_direction  (cost=0.00..8.05 rows=363 width=0) (actual time=0.057..0.057 rows=306 loops=1)
+               Index Cond: ((account_id = 3547) AND (direction = 'DEBIT'::entry_direction_t))
+               Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=182
+ Planning Time: 0.460 ms
+ Execution Time: 0.836 ms
+(13 rows)
+
+
+--- account+direction composite | run 3 ---
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=1151.60..1151.61 rows=1 width=40) (actual time=0.685..0.686 rows=1 loops=1)
+   Buffers: shared hit=307
+   ->  Bitmap Heap Scan on ledger_entries  (cost=8.15..1149.78 rows=363 width=8) (actual time=0.101..0.622 rows=306 loops=1)
+         Recheck Cond: ((account_id = 3547) AND (direction = 'DEBIT'::entry_direction_t))
+         Heap Blocks: exact=301
+         Buffers: shared hit=307
+         ->  Bitmap Index Scan on idx_le_account_direction  (cost=0.00..8.05 rows=363 width=0) (actual time=0.060..0.060 rows=306 loops=1)
+               Index Cond: ((account_id = 3547) AND (direction = 'DEBIT'::entry_direction_t))
+               Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=182
+ Planning Time: 0.496 ms
+ Execution Time: 0.742 ms
+(13 rows)
+

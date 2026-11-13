@@ -1,0 +1,175 @@
+
+==============================================================
+EXPERIMENT 1 - Sequential scan versus index scan
+==============================================================
+Query: every posting for one mid-volume wallet (account_id = 3547,
+694 rows, 0.13% of the table).
+
+Part A measures the unindexed baseline. Part B adds a single-column index
+and repeats. A cold run follows a server restart so that disk reads are
+distinguishable from shared-buffer hits.
+
+==============================================================
+1A - BASELINE, no secondary index (COLD: server just restarted)
+==============================================================
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..9128.07 rows=617 width=40) (actual time=0.379..28.718 rows=694 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared read=5313
+   ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=257 width=40) (actual time=0.076..22.077 rows=231 loops=3)
+         Filter: (account_id = 3547)
+         Rows Removed by Filter: 175984
+         Buffers: shared read=5313
+ Planning:
+   Buffers: shared hit=75 read=24 dirtied=1
+ Planning Time: 1.449 ms
+ Execution Time: 28.896 ms
+(12 rows)
+
+
+==============================================================
+1A - BASELINE, no secondary index (WARM)
+==============================================================
+
+--- baseline seq scan | run 1 ---
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..9128.07 rows=617 width=40) (actual time=0.302..25.378 rows=694 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=96 read=5217
+   ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=257 width=40) (actual time=0.119..20.032 rows=231 loops=3)
+         Filter: (account_id = 3547)
+         Rows Removed by Filter: 175984
+         Buffers: shared hit=96 read=5217
+ Planning:
+   Buffers: shared hit=99
+ Planning Time: 0.277 ms
+ Execution Time: 25.468 ms
+(12 rows)
+
+
+--- baseline seq scan | run 2 ---
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..9128.07 rows=617 width=40) (actual time=0.378..27.537 rows=694 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=192 read=5121
+   ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=257 width=40) (actual time=0.067..21.280 rows=231 loops=3)
+         Filter: (account_id = 3547)
+         Rows Removed by Filter: 175984
+         Buffers: shared hit=192 read=5121
+ Planning:
+   Buffers: shared hit=99
+ Planning Time: 0.418 ms
+ Execution Time: 27.649 ms
+(12 rows)
+
+
+--- baseline seq scan | run 3 ---
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..9128.07 rows=617 width=40) (actual time=0.288..23.132 rows=694 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=288 read=5025
+   ->  Parallel Seq Scan on ledger_entries  (cost=0.00..8066.37 rows=257 width=40) (actual time=0.181..17.626 rows=231 loops=3)
+         Filter: (account_id = 3547)
+         Rows Removed by Filter: 175984
+         Buffers: shared hit=288 read=5025
+ Planning:
+   Buffers: shared hit=99
+ Planning Time: 0.307 ms
+ Execution Time: 23.221 ms
+(12 rows)
+
+
+==============================================================
+1B - CREATE INDEX
+==============================================================
+Timing is on.
+CREATE INDEX
+Time: 291.796 ms
+ANALYZE
+ index_size 
+------------
+ 3736 kB
+(1 row)
+
+
+==============================================================
+1B - WITH single-column index (COLD: server just restarted)
+==============================================================
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=40) (actual time=0.228..5.726 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=3 read=658
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.116..0.116 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=3 read=4
+ Planning:
+   Buffers: shared hit=92 read=29 dirtied=5
+ Planning Time: 0.590 ms
+ Execution Time: 5.848 ms
+(11 rows)
+
+
+==============================================================
+1B - WITH single-column index (WARM)
+==============================================================
+
+--- indexed | run 1 ---
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=40) (actual time=0.285..1.420 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=661
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.138..0.139 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=111
+ Planning Time: 0.489 ms
+ Execution Time: 1.547 ms
+(11 rows)
+
+
+--- indexed | run 2 ---
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=40) (actual time=0.243..1.506 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=661
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.133..0.134 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=111
+ Planning Time: 0.469 ms
+ Execution Time: 1.654 ms
+(11 rows)
+
+
+--- indexed | run 3 ---
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ledger_entries  (cost=10.30..2076.42 rows=758 width=40) (actual time=0.203..1.082 rows=694 loops=1)
+   Recheck Cond: (account_id = 3547)
+   Heap Blocks: exact=654
+   Buffers: shared hit=661
+   ->  Bitmap Index Scan on idx_le_account  (cost=0.00..10.11 rows=758 width=0) (actual time=0.099..0.099 rows=694 loops=1)
+         Index Cond: (account_id = 3547)
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=111
+ Planning Time: 0.327 ms
+ Execution Time: 1.186 ms
+(11 rows)
+

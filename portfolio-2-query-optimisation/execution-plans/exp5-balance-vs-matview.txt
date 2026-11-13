@@ -1,0 +1,386 @@
+
+==============================================================
+EXPERIMENT 5 - Derived balance versus materialised view
+==============================================================
+Portfolio 1 deliberately stores no balance anywhere: account_balances is a
+view that aggregates the ledger. normalisation.md promised that the cost of
+that decision would be measured rather than assumed. This is that
+measurement.
+
+Three things are compared:
+  A  one account's balance, derived from the ledger
+  B  every account's balance, derived from the ledger
+  C  the same, served from a materialised view
+and then the refresh cost and storage overhead of the materialised view.
+
+==============================================================
+5A - single account balance, derived
+==============================================================
+
+--- derived, one account | run 1 ---
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=9.49..1791.18 rows=1 width=28) (actual time=1.311..1.313 rows=1 loops=1)
+   Buffers: shared hit=661 read=3
+   ->  GroupAggregate  (cost=9.49..1791.17 rows=1 width=86) (actual time=1.310..1.311 rows=1 loops=1)
+         Buffers: shared hit=661 read=3
+         ->  Nested Loop Left Join  (cost=9.49..1786.53 rows=617 width=62) (actual time=0.233..1.173 rows=694 loops=1)
+               Buffers: shared hit=661 read=3
+               ->  Index Scan using accounts_id_currency_uq on accounts a  (cost=0.28..8.30 rows=1 width=50) (actual time=0.037..0.038 rows=1 loops=1)
+                     Index Cond: (account_id = 3547)
+                     Buffers: shared hit=3 read=3
+               ->  Bitmap Heap Scan on ledger_entries le  (cost=9.21..1772.06 rows=617 width=20) (actual time=0.191..1.026 rows=694 loops=1)
+                     Recheck Cond: (account_id = 3547)
+                     Heap Blocks: exact=654
+                     Buffers: shared hit=658
+                     ->  Bitmap Index Scan on idx_le_account  (cost=0.00..9.05 rows=617 width=0) (actual time=0.084..0.084 rows=694 loops=1)
+                           Index Cond: (account_id = 3547)
+                           Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=446 read=5
+ Planning Time: 0.996 ms
+ Execution Time: 1.396 ms
+(20 rows)
+
+
+--- derived, one account | run 2 ---
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=9.49..1791.18 rows=1 width=28) (actual time=1.526..1.533 rows=1 loops=1)
+   Buffers: shared hit=664
+   ->  GroupAggregate  (cost=9.49..1791.17 rows=1 width=86) (actual time=1.524..1.531 rows=1 loops=1)
+         Buffers: shared hit=664
+         ->  Nested Loop Left Join  (cost=9.49..1786.53 rows=617 width=62) (actual time=0.216..1.383 rows=694 loops=1)
+               Buffers: shared hit=664
+               ->  Index Scan using accounts_id_currency_uq on accounts a  (cost=0.28..8.30 rows=1 width=50) (actual time=0.023..0.024 rows=1 loops=1)
+                     Index Cond: (account_id = 3547)
+                     Buffers: shared hit=6
+               ->  Bitmap Heap Scan on ledger_entries le  (cost=9.21..1772.06 rows=617 width=20) (actual time=0.189..1.224 rows=694 loops=1)
+                     Recheck Cond: (account_id = 3547)
+                     Heap Blocks: exact=654
+                     Buffers: shared hit=658
+                     ->  Bitmap Index Scan on idx_le_account  (cost=0.00..9.05 rows=617 width=0) (actual time=0.096..0.096 rows=694 loops=1)
+                           Index Cond: (account_id = 3547)
+                           Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=451
+ Planning Time: 0.885 ms
+ Execution Time: 1.644 ms
+(20 rows)
+
+
+--- derived, one account | run 3 ---
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=9.49..1791.18 rows=1 width=28) (actual time=1.252..1.254 rows=1 loops=1)
+   Buffers: shared hit=664
+   ->  GroupAggregate  (cost=9.49..1791.17 rows=1 width=86) (actual time=1.251..1.252 rows=1 loops=1)
+         Buffers: shared hit=664
+         ->  Nested Loop Left Join  (cost=9.49..1786.53 rows=617 width=62) (actual time=0.197..1.124 rows=694 loops=1)
+               Buffers: shared hit=664
+               ->  Index Scan using accounts_id_currency_uq on accounts a  (cost=0.28..8.30 rows=1 width=50) (actual time=0.029..0.030 rows=1 loops=1)
+                     Index Cond: (account_id = 3547)
+                     Buffers: shared hit=6
+               ->  Bitmap Heap Scan on ledger_entries le  (cost=9.21..1772.06 rows=617 width=20) (actual time=0.164..0.989 rows=694 loops=1)
+                     Recheck Cond: (account_id = 3547)
+                     Heap Blocks: exact=654
+                     Buffers: shared hit=658
+                     ->  Bitmap Index Scan on idx_le_account  (cost=0.00..9.05 rows=617 width=0) (actual time=0.085..0.085 rows=694 loops=1)
+                           Index Cond: (account_id = 3547)
+                           Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=451
+ Planning Time: 3.105 ms
+ Execution Time: 1.351 ms
+(20 rows)
+
+
+==============================================================
+5A' - single account balance, busiest wallet
+==============================================================
+
+--- derived, busiest | run 1 ---
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=634.99..7637.15 rows=1 width=28) (actual time=41.116..41.120 rows=1 loops=1)
+   Buffers: shared hit=5313 read=2
+   ->  GroupAggregate  (cost=634.99..7637.14 rows=1 width=86) (actual time=41.113..41.115 rows=1 loops=1)
+         Buffers: shared hit=5313 read=2
+         ->  Nested Loop Left Join  (cost=634.99..7216.84 rows=56037 width=62) (actual time=2.718..29.857 rows=56297 loops=1)
+               Buffers: shared hit=5313 read=2
+               ->  Index Scan using accounts_id_currency_uq on accounts a  (cost=0.28..8.30 rows=1 width=50) (actual time=0.055..0.059 rows=1 loops=1)
+                     Index Cond: (account_id = 2415)
+                     Buffers: shared hit=4 read=2
+               ->  Bitmap Heap Scan on ledger_entries le  (cost=634.71..6648.17 rows=56037 width=20) (actual time=2.657..20.484 rows=56297 loops=1)
+                     Recheck Cond: (account_id = 2415)
+                     Heap Blocks: exact=5259
+                     Buffers: shared hit=5309
+                     ->  Bitmap Index Scan on idx_le_account  (cost=0.00..620.70 rows=56037 width=0) (actual time=1.906..1.906 rows=56297 loops=1)
+                           Index Cond: (account_id = 2415)
+                           Buffers: shared hit=50
+ Planning:
+   Buffers: shared hit=451
+ Planning Time: 1.130 ms
+ Execution Time: 41.269 ms
+(20 rows)
+
+
+--- derived, busiest | run 2 ---
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=634.99..7637.15 rows=1 width=28) (actual time=38.026..38.029 rows=1 loops=1)
+   Buffers: shared hit=5315
+   ->  GroupAggregate  (cost=634.99..7637.14 rows=1 width=86) (actual time=38.024..38.025 rows=1 loops=1)
+         Buffers: shared hit=5315
+         ->  Nested Loop Left Join  (cost=634.99..7216.84 rows=56037 width=62) (actual time=4.256..29.137 rows=56297 loops=1)
+               Buffers: shared hit=5315
+               ->  Index Scan using accounts_id_currency_uq on accounts a  (cost=0.28..8.30 rows=1 width=50) (actual time=0.018..0.022 rows=1 loops=1)
+                     Index Cond: (account_id = 2415)
+                     Buffers: shared hit=6
+               ->  Bitmap Heap Scan on ledger_entries le  (cost=634.71..6648.17 rows=56037 width=20) (actual time=4.231..19.981 rows=56297 loops=1)
+                     Recheck Cond: (account_id = 2415)
+                     Heap Blocks: exact=5259
+                     Buffers: shared hit=5309
+                     ->  Bitmap Index Scan on idx_le_account  (cost=0.00..620.70 rows=56037 width=0) (actual time=1.777..1.777 rows=56297 loops=1)
+                           Index Cond: (account_id = 2415)
+                           Buffers: shared hit=50
+ Planning:
+   Buffers: shared hit=451
+ Planning Time: 0.922 ms
+ Execution Time: 38.118 ms
+(20 rows)
+
+
+--- derived, busiest | run 3 ---
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=634.99..7637.15 rows=1 width=28) (actual time=42.016..42.019 rows=1 loops=1)
+   Buffers: shared hit=5315
+   ->  GroupAggregate  (cost=634.99..7637.14 rows=1 width=86) (actual time=42.014..42.016 rows=1 loops=1)
+         Buffers: shared hit=5315
+         ->  Nested Loop Left Join  (cost=634.99..7216.84 rows=56037 width=62) (actual time=2.955..29.638 rows=56297 loops=1)
+               Buffers: shared hit=5315
+               ->  Index Scan using accounts_id_currency_uq on accounts a  (cost=0.28..8.30 rows=1 width=50) (actual time=0.021..0.025 rows=1 loops=1)
+                     Index Cond: (account_id = 2415)
+                     Buffers: shared hit=6
+               ->  Bitmap Heap Scan on ledger_entries le  (cost=634.71..6648.17 rows=56037 width=20) (actual time=2.927..21.036 rows=56297 loops=1)
+                     Recheck Cond: (account_id = 2415)
+                     Heap Blocks: exact=5259
+                     Buffers: shared hit=5309
+                     ->  Bitmap Index Scan on idx_le_account  (cost=0.00..620.70 rows=56037 width=0) (actual time=2.005..2.005 rows=56297 loops=1)
+                           Index Cond: (account_id = 2415)
+                           Buffers: shared hit=50
+ Planning:
+   Buffers: shared hit=451
+ Planning Time: 1.147 ms
+ Execution Time: 42.120 ms
+(20 rows)
+
+
+==============================================================
+5B - ALL account balances, derived from the ledger
+==============================================================
+
+--- derived, all accounts | run 1 ---
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=17467.68..17605.43 rows=5510 width=28) (actual time=361.000..364.342 rows=5510 loops=1)
+   Buffers: shared hit=5315 read=67
+   ->  HashAggregate  (cost=17467.68..17550.33 rows=5510 width=86) (actual time=360.998..363.847 rows=5510 loops=1)
+         Group Key: a.account_id
+         Batches: 1  Memory Usage: 2769kB
+         Buffers: shared hit=5315 read=67
+         ->  Hash Right Join  (cost=192.97..12181.21 rows=528647 width=62) (actual time=3.178..202.870 rows=528691 loops=1)
+               Hash Cond: (le.account_id = a.account_id)
+               Buffers: shared hit=5315 read=67
+               ->  Seq Scan on ledger_entries le  (cost=0.00..10599.47 rows=528647 width=20) (actual time=0.018..43.526 rows=528647 loops=1)
+                     Buffers: shared hit=5313
+               ->  Hash  (cost=124.10..124.10 rows=5510 width=50) (actual time=3.099..3.100 rows=5510 loops=1)
+                     Buckets: 8192  Batches: 1  Memory Usage: 516kB
+                     Buffers: shared hit=2 read=67
+                     ->  Seq Scan on accounts a  (cost=0.00..124.10 rows=5510 width=50) (actual time=0.016..1.412 rows=5510 loops=1)
+                           Buffers: shared hit=2 read=67
+ Planning:
+   Buffers: shared hit=394 read=7
+ Planning Time: 1.368 ms
+ Execution Time: 364.834 ms
+(20 rows)
+
+
+--- derived, all accounts | run 2 ---
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=17467.68..17605.43 rows=5510 width=28) (actual time=431.177..436.109 rows=5510 loops=1)
+   Buffers: shared hit=5382
+   ->  HashAggregate  (cost=17467.68..17550.33 rows=5510 width=86) (actual time=431.175..435.311 rows=5510 loops=1)
+         Group Key: a.account_id
+         Batches: 1  Memory Usage: 2769kB
+         Buffers: shared hit=5382
+         ->  Hash Right Join  (cost=192.97..12181.21 rows=528647 width=62) (actual time=1.816..242.443 rows=528691 loops=1)
+               Hash Cond: (le.account_id = a.account_id)
+               Buffers: shared hit=5382
+               ->  Seq Scan on ledger_entries le  (cost=0.00..10599.47 rows=528647 width=20) (actual time=0.012..53.031 rows=528647 loops=1)
+                     Buffers: shared hit=5313
+               ->  Hash  (cost=124.10..124.10 rows=5510 width=50) (actual time=1.753..1.755 rows=5510 loops=1)
+                     Buckets: 8192  Batches: 1  Memory Usage: 516kB
+                     Buffers: shared hit=69
+                     ->  Seq Scan on accounts a  (cost=0.00..124.10 rows=5510 width=50) (actual time=0.004..0.653 rows=5510 loops=1)
+                           Buffers: shared hit=69
+ Planning:
+   Buffers: shared hit=401
+ Planning Time: 0.912 ms
+ Execution Time: 436.602 ms
+(20 rows)
+
+
+--- derived, all accounts | run 3 ---
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on account_balances  (cost=17467.68..17605.43 rows=5510 width=28) (actual time=321.953..325.450 rows=5510 loops=1)
+   Buffers: shared hit=5382
+   ->  HashAggregate  (cost=17467.68..17550.33 rows=5510 width=86) (actual time=321.951..324.948 rows=5510 loops=1)
+         Group Key: a.account_id
+         Batches: 1  Memory Usage: 2769kB
+         Buffers: shared hit=5382
+         ->  Hash Right Join  (cost=192.97..12181.21 rows=528647 width=62) (actual time=1.843..179.500 rows=528691 loops=1)
+               Hash Cond: (le.account_id = a.account_id)
+               Buffers: shared hit=5382
+               ->  Seq Scan on ledger_entries le  (cost=0.00..10599.47 rows=528647 width=20) (actual time=0.014..39.274 rows=528647 loops=1)
+                     Buffers: shared hit=5313
+               ->  Hash  (cost=124.10..124.10 rows=5510 width=50) (actual time=1.781..1.783 rows=5510 loops=1)
+                     Buckets: 8192  Batches: 1  Memory Usage: 516kB
+                     Buffers: shared hit=69
+                     ->  Seq Scan on accounts a  (cost=0.00..124.10 rows=5510 width=50) (actual time=0.004..0.691 rows=5510 loops=1)
+                           Buffers: shared hit=69
+ Planning:
+   Buffers: shared hit=401
+ Planning Time: 1.019 ms
+ Execution Time: 325.858 ms
+(20 rows)
+
+
+==============================================================
+5C - CREATE MATERIALIZED VIEW
+==============================================================
+Timing is on.
+SELECT 5510
+Time: 254.214 ms
+CREATE INDEX
+ANALYZE
+
+==============================================================
+5C - single account balance, from the materialised view
+==============================================================
+
+--- matview, one account | run 1 ---
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using idx_mv_balances_account on mv_account_balances  (cost=0.28..8.30 rows=1 width=16) (actual time=0.040..0.040 rows=1 loops=1)
+   Index Cond: (account_id = 3547)
+   Buffers: shared hit=4 read=2
+ Planning:
+   Buffers: shared hit=54 read=1
+ Planning Time: 0.271 ms
+ Execution Time: 0.087 ms
+(7 rows)
+
+
+--- matview, one account | run 2 ---
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using idx_mv_balances_account on mv_account_balances  (cost=0.28..8.30 rows=1 width=16) (actual time=0.042..0.043 rows=1 loops=1)
+   Index Cond: (account_id = 3547)
+   Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=55
+ Planning Time: 0.445 ms
+ Execution Time: 0.295 ms
+(7 rows)
+
+
+--- matview, one account | run 3 ---
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using idx_mv_balances_account on mv_account_balances  (cost=0.28..8.30 rows=1 width=16) (actual time=0.037..0.038 rows=1 loops=1)
+   Index Cond: (account_id = 3547)
+   Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=55
+ Planning Time: 0.424 ms
+ Execution Time: 0.116 ms
+(7 rows)
+
+
+==============================================================
+5C - ALL balances, from the materialised view
+==============================================================
+
+--- matview, all accounts | run 1 ---
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on mv_account_balances  (cost=0.00..183.10 rows=5510 width=16) (actual time=0.012..0.744 rows=5510 loops=1)
+   Buffers: shared hit=128
+ Planning:
+   Buffers: shared hit=45
+ Planning Time: 0.165 ms
+ Execution Time: 1.050 ms
+(6 rows)
+
+
+--- matview, all accounts | run 2 ---
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on mv_account_balances  (cost=0.00..183.10 rows=5510 width=16) (actual time=0.015..1.149 rows=5510 loops=1)
+   Buffers: shared hit=128
+ Planning:
+   Buffers: shared hit=45
+ Planning Time: 0.965 ms
+ Execution Time: 1.556 ms
+(6 rows)
+
+
+--- matview, all accounts | run 3 ---
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on mv_account_balances  (cost=0.00..183.10 rows=5510 width=16) (actual time=0.013..0.733 rows=5510 loops=1)
+   Buffers: shared hit=128
+ Planning:
+   Buffers: shared hit=45
+ Planning Time: 0.173 ms
+ Execution Time: 0.997 ms
+(6 rows)
+
+
+==============================================================
+5D - refresh cost and storage
+==============================================================
+Timing is on.
+REFRESH MATERIALIZED VIEW
+Time: 383.847 ms
+Timing is on.
+REFRESH MATERIALIZED VIEW
+Time: 456.883 ms
+ matview_total_size | ledger_total_size 
+--------------------+-------------------
+ 2480 kB            | 93 MB
+(1 row)
+
+
+==============================================================
+5E - FRESHNESS: the materialised view is stale the moment the ledger moves
+==============================================================
+BEGIN
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+COMMIT
+      source       |   balance    
+-------------------+--------------
+ derived (view)    | 1628893.6400
+ materialised view | 1623893.6400
+(2 rows)
+
+
+The derived view reflects the new posting immediately. The materialised
+view still reports the pre-posting balance until it is refreshed - which
+is the entire trade-off, stated numerically.
